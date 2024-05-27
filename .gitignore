@@ -26,5 +26,10 @@ devel_isolated/
 *~
 .#*
 
+# Python
+setup.py
+*.pyc
+
+
 # Catkin custom files
 CATKIN_IGNORE
