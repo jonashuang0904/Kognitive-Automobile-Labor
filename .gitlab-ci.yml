@@ -5,7 +5,7 @@ cache:
     - ccache/
 
 before_script:
-  - apt update >/dev/null && apt install -y git >/dev/null
+  - apt update >/dev/null && apt install -y git ros-noetic-mrt-cmake-modules >/dev/null
   - git clone https://gitlab.com/VictorLamoine/ros_gitlab_ci.git >/dev/null
   - source ros_gitlab_ci/gitlab-ci.bash >/dev/null
 
