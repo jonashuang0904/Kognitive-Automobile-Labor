@@ -1,6 +1,6 @@
-set(MRT_PKG_VERSION 4.0.0)
-# Modify only if you know what you are doing!
 cmake_minimum_required(VERSION 3.5.1)
+
+set(MRT_PKG_VERSION 4.0.0)
 project(kal2_control)
 
 ###################
