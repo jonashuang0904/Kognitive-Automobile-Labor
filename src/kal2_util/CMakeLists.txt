@@ -10,14 +10,6 @@ find_package(mrt_cmake_modules REQUIRED)
 include(UseMrtStdCompilerFlags)
 include(GatherDeps)
 
-# You can add a custom.cmake in order to add special handling for this package. E.g. you can do:
-# list(REMOVE_ITEM DEPENDEND_PACKAGES <package name 1> <package name 2> ...)
-# To remove libs which cannot be found automatically. You can also "find_package" other, custom dependencies there.
-# You can also set PROJECT_INSTALL_FILES to install files that are not installed by default.
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/custom.cmake")
-    include("${CMAKE_CURRENT_SOURCE_DIR}/custom.cmake")
-endif()
-
 find_package(AutoDeps REQUIRED COMPONENTS ${DEPENDEND_PACKAGES})
 
 mrt_parse_package_xml()
