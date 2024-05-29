@@ -5,9 +5,18 @@ cache:
     - ccache/
 
 before_script:
-  - apt update >/dev/null && apt install -y git ros-noetic-mrt-cmake-modules python3-catkin-lint >/dev/null
-  - git clone https://gitlab.com/VictorLamoine/ros_gitlab_ci.git >/dev/null
-  - source ros_gitlab_ci/gitlab-ci.bash >/dev/null
+  - ROS_DISTRO=$(ls /opt/ros/)
+  - echo "Using ros distro:" $ROS_DISTRO
+  - apt update >/dev/null && apt install -y git ros-noetic-mrt-cmake-modules >/dev/null
+  - apt-get install -qq gcc g++ build-essential
+  - apt-get install -qq python3-catkin-tools python3-catkin-lint python3-rosdep python3-pip xterm
+  - pip install pylint pylint-exit anybadge
+  - source /opt/ros/${ROS_DISTRO}/setup.bash
+  - echo "Using rosdep to install dependencies"
+  - rosdep init || true
+  - rosdep update
+  - rosdep install --from-paths src --ignore-src --rosdistro ${ROS_DISTRO} -y --as-root apt:false
+
 
 catkin_make:
   stage: build
@@ -23,3 +32,17 @@ catkin lint:
   stage: test
   script:
     - catkin_lint -W2 .
+
+pylint:
+  stage: test    
+  script:
+    - echo  $(git ls-files '*.py')
+    - mkdir ./pylint
+    - pylint --output-format=text $(git ls-files '*.py') | tee ./pylint/pylint.log || pylint-exit $?
+    - PYLINT_SCORE=$(sed -n 's/^Your code has been rated at \([-0-9.]*\)\/.*/\1/p' ./pylint/pylint.log)
+    - anybadge --label=Pylint --file=pylint/pylint.svg --value=$PYLINT_SCORE 2=red 4=orange 8=yellow 10=green
+    - echo "Pylint score is $PYLINT_SCORE"
+  artifacts:
+    paths:
+      - ./pylint/
+
