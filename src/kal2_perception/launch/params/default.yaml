@@ -1,0 +1,2 @@
+color_image_topic: "/camera_front/color/image_raw"
+depth_image_topic: "/camera_front/aligned_depth_to_color/image_raw"

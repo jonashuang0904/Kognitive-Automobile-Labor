@@ -1,0 +1,10 @@
+#! /usr/bin/env python3
+
+import rospy
+from contextlib import suppress
+from kal2_perception.lane_detector_node import LaneDetectorNode
+
+if __name__ == "__main__":
+    with suppress(rospy.ROSInterruptException):
+        node = LaneDetectorNode()
+        rospy.spin()
