@@ -1,0 +1,25 @@
+image: ros:noetic-ros-core
+
+cache:
+  paths:
+    - ccache/
+
+before_script:
+  - apt update >/dev/null && apt install -y git ros-noetic-mrt-cmake-modules python3-catkin-lint >/dev/null
+  - git clone https://gitlab.com/VictorLamoine/ros_gitlab_ci.git >/dev/null
+  - source ros_gitlab_ci/gitlab-ci.bash >/dev/null
+
+catkin_make:
+  stage: build
+  script:
+    - catkin_make
+
+catkin tools:
+  stage: build
+  script:
+    - catkin build --summarize --no-status --force-color
+
+catkin lint:
+  stage: test
+  script:
+    - catkin_lint -W2 .
