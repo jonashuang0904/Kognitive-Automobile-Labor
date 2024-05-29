@@ -33,8 +33,8 @@ class BevTransformer:
         self._homography = homography
         self._target_size = target_size
 
-    def transform(self, image: np.ndarray) -> np.ndarray:
-        return cv.warpPerspective(image, self.homography, self.target_size)
+    def transform(self, image: np.ndarray, border_mode = cv.BORDER_CONSTANT) -> np.ndarray:
+        return cv.warpPerspective(image, self.homography, self.target_size, borderMode=border_mode)
 
     @property
     def homography(self):
