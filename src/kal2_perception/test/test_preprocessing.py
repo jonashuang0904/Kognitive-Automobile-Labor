@@ -58,7 +58,7 @@ def test_unet_preprocessor():
     preprocessor = UnetPreprocessor(model_path=model_path, runtime="onnx")
 
     input_data = np.zeros((720, 1280, 3), dtype=np.uint8)
-    output_data = preprocessor.process(input_data, np.zeros((720, 1280, 1), dtype=np.uint8))
+    output_data = preprocessor.process(input_data, np.zeros((720, 1280), dtype=np.uint8))
 
     assert output_data.shape == (720, 1280), "Output shape is not correct."
 

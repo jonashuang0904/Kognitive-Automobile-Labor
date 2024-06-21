@@ -5,7 +5,6 @@ import rospy
 import yaml
 from cachetools import TTLCache, cached
 
-from abc import ABC, abstractmethod
 
 
 class ParamHelper:
@@ -29,7 +28,7 @@ class ParamHelper:
         return yaml.dump(self._get_param(self._ns), default_flow_style=False)
 
 
-class NodeBase(ABC):
+class NodeBase:
     def __init__(
         self, *, name: str, parameter_cache_time: float = 1, log_level: int = rospy.INFO
     ):
@@ -42,7 +41,6 @@ class NodeBase(ABC):
     def __shutdown(self):
         if self._active:
             self._active = False
-            self.stop()
 
     def run(self):
         rospy.spin()
@@ -50,13 +48,3 @@ class NodeBase(ABC):
     @property
     def params(self) -> ParamHelper:
         return self._params
-
-    @abstractmethod
-    def start(self):
-        """Called when activating the node."""
-        pass
-
-    @abstractmethod
-    def stop(self):
-        """Called when deactivating or shutting down the node."""
-        pass

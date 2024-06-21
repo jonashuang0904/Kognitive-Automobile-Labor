@@ -1,2 +1,18 @@
 color_image_topic: "/camera_front/color/image_raw"
+color_image_info_topic: "/camera_front/color/camera_info"
 depth_image_topic: "/camera_front/aligned_depth_to_color/image_raw"
+
+model_path: "models/segmentation_model_v2.fixed_224_224_3.onnx"
+
+publish_debug_images: true
+
+# TODO: automatically add publishers
+# publishers:
+#   preprocessed_image:
+#     topic: "/kal2/debug/preprocessed_image"
+#     type: "sensor_msgs.msgs.Image"
+#     queue_size: 10
+#   bev_image:
+#     topic: "/kal2/debug/bev_image"
+#     type: "sensor_msgs.msgs.Image"
+#     queue_size: 10
