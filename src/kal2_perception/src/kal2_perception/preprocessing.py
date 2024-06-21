@@ -1,3 +1,4 @@
+import time
 import numpy as np
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -8,11 +9,26 @@ import cv2 as cv
 
 class ImagePreprocessor(ABC):
     def __init__(self, verbose: bool = False) -> None:
+        super().__init__()
         self._verbose = verbose
+
+        self._last_duration = None
+        self._average_duration = None
 
 
     def process(self, color_image: np.ndarray, depth_image: np.ndarray) -> np.ndarray:
-        return self._do_process(color_image, depth_image)
+        t0 = time.perf_counter()
+        result = self._do_process(color_image, depth_image)
+        dt = time.perf_counter() - t0
+        self._average_duration = (self._average_duration or dt) * 0.9 + dt * 0.1
+        self._last_duration = dt
+        return result
+    
+    def get_last_duration(self) -> float:
+        return self._last_duration
+    
+    def get_average_duration(self) -> float:
+        return self._average_duration
 
 
     @abstractmethod
@@ -22,6 +38,7 @@ class ImagePreprocessor(ABC):
 
 class InferenceSession(ABC):
     def __init__(self, model_path: Path, input_shape: Tuple[int, int, int, int]) -> None:
+        super().__init__()
         self._model_path = model_path
         self._input_shape = input_shape
 
@@ -83,10 +100,11 @@ class OnnxInferenceSession(InferenceSession):
 
 class UnetPreprocessor(ImagePreprocessor):
     def __init__(self, *, model_path: Path, horizon: int = 200, runtime: str = "onnx", input_shape: Tuple[int, int, int, int] = (1, 224, 224, 3)) -> None:
+        super().__init__()
         self._horizon = horizon
         self._input_shape = input_shape
         self._image_shape = (720, 1280)
-        self._interpolation = cv.INTER_CUBIC
+        self._interpolation = cv.INTER_LINEAR
 
         if runtime == "onnx":
             self._inference_session = OnnxInferenceSession(model_path=model_path, input_shape=input_shape)
@@ -117,8 +135,8 @@ class UnetPreprocessor(ImagePreprocessor):
         if color_image.shape != (h, w, 3):
             raise ValueError(f"Invalid color image shape: {color_image.shape} != {(h, w, 3)}")
         
-        if depth_image.shape != (h, w, 1):
-            raise ValueError(f"Invalid depth image shape: {depth_image.shape} != {(h, w, 1)}")
+        if depth_image.shape != (h, w):
+            raise ValueError(f"Invalid depth image shape: {depth_image.shape} != {(h, w)}")
 
         X = self._resize_for_inference(color_image)
         y = self._inference_session.run(X)

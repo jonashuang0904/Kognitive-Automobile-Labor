@@ -3,5 +3,6 @@
     <node name="lane_detector_node" ns="kal2" pkg="kal2_perception" type="lane_detector_node" output="screen">
         <env name="ROSCONSOLE_FORMAT" value="[${severity}] [${time}] [${node}]: ${message}"/>
         <rosparam file="$(find kal2_perception)/launch/params/default.yaml" command="load" />
+        <!-- <param name ="/use_sim_time" value="true"/> -->
     </node>
 </launch>
