@@ -1,0 +1,11 @@
+#! /usr/bin/env python3
+
+import rospy
+from contextlib import suppress
+
+from kal2_control.pid_controller_node import PIDControllerNode
+
+if __name__ == '__main__':
+    with suppress(rospy.ROSInterruptException):
+        controller_node = PIDControllerNode()
+        rospy.spin()

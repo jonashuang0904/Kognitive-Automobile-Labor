@@ -1,0 +1,9 @@
+controller:
+  kp: 0.7
+  ki: 0.05
+  kd: 0.6
+  speed: 0.5
+  rate: 15
+
+control_output_topic: "/anicar/mux/ackermann_cmd_mux/input/path_follow"
+path_topic: "/path"
