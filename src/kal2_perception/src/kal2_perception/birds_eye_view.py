@@ -100,6 +100,9 @@ def _populate_grid(grid: np.ndarray, indices: np.ndarray):
     return grid
 
 def rasterize_points(points: np.ndarray, config: VoxelConfig) -> np.ndarray:
+    if points.ndim != 2 or points.shape[1] != 3:
+        raise ValueError(f"Expected (N,3), got {points.shape}.")
+
     mask = (
         (points[:, 0] > config.x_min)
         & (points[:, 0] < config.x_max)
@@ -124,7 +127,7 @@ def camera_info_to_o3d_intrinsics(camera_info: CameraInfo) -> o3d.camera.Pinhole
 
 class PointcloudBevTransformer:
     def __init__(self, camera_info: CameraInfo, extrinsic_matrix: np.ndarray) -> None:
-        self._config = VoxelConfig(resolution=100)
+        self._config = VoxelConfig(resolution=100, x_max=2.0)
         self._depth_scale = 1000.0
         self._max_depth = 3.5
         self._intrinsics = camera_info_to_o3d_intrinsics(camera_info)
