@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+    <node name="map_recorder_node" ns="kal2" pkg="kal2_perception" type="map_recorder_node" output="screen">
+        <env name="ROSCONSOLE_FORMAT" value="[${severity}] [${time}] [${node}]: ${message}"/>
+        <rosparam file="$(find kal2_perception)/launch/params/localization.yaml" command="load" />
+        <param name ="/use_sim_time" value="true"/>
+    </node>
+</launch>
