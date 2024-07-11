@@ -63,7 +63,7 @@ class HoughFeatureExtractor(FeatureExtractor):
     def __init__(self) -> None:
         super().__init__()
 
-        self._hough_params = {"rho": 1, "theta": np.pi / 180, "threshold": 10, "minLineLength": 10, "maxLineGap": 10}
+        self._hough_params = {"rho": 1, "theta": np.pi / 180, "threshold": 15, "minLineLength": 15, "maxLineGap": 10}
 
     def _do_extract(self, image: np.ndarray) -> np.ndarray:
         lines = cv.HoughLinesP(image=image, **self._hough_params)
@@ -73,3 +73,13 @@ class HoughFeatureExtractor(FeatureExtractor):
             return np.array(lines).squeeze().T
         
         return np.array(lines).reshape(4, -1)
+    
+
+
+
+
+class RansacFeatureExtractor:
+    def __init__(self) -> None:
+        pass
+
+    

@@ -125,16 +125,34 @@ class LaneSegmentOverlay(ImageOverlay):
 
         return cv.addWeighted(overlay, 0.5, image, 0.5, 0)
     
-# class LaneMapOverlay(ImageOverlay):
-#     def __init__(self, intrinsic_matrix: np.ndarray, extrinsic_matrix: np.ndarray):
-#         super().__init__(intrinsic_matrix, extrinsic_matrix)
+class LaneMapOverlay(ImageOverlay):
+    def __init__(self, intrinsic_matrix: np.ndarray, extrinsic_matrix: np.ndarray):
+        super().__init__(intrinsic_matrix, extrinsic_matrix)
 
-#     def _do_draw(self, image: np.ndarray, lane_map) -> np.ndarray:
-#         overlay = image.copy()
+    def _do_draw(self, image: np.ndarray, lane_map) -> np.ndarray:
+        overlay = image.copy()
+
+        if lane_map._center_line_points is not None:
+            points = np.concatenate(lane_map._center_line_points).T
+
+            path =  np.vstack((points, -0.23 * np.ones((1, points.shape[1]))))
+            path = self.project_to_image(path).astype(np.int32)
+
+            from kal2_perception.birds_eye_view import rasterize_points, VoxelConfig
+            points = np.vstack((points, np.zeros((1, points.shape[1]))))
+            grid = rasterize_points(points.T, VoxelConfig(x_min=0, x_max=15, y_min=-10, y_max=10))
+            grid[grid != 0] = 255
+
+            # for point in path:
+            #     cv.circle(image, tuple(point), 3, (0, 0, 255), -1)
+
+            # cv.polylines(image, [path], isClosed=False, color=(255, 0, 0), thickness=2)
+        else:
+            grid = np.zeros((10, 10), dtype=np.uint8)
 
 
 
-#         return cv.addWeighted(overlay, 0.5, image, 0.5, 0)
+        return grid.astype(np.uint8) #cv.addWeighted(overlay, 0.5, image, 0.5, 0)
 
     
 

@@ -54,7 +54,7 @@ class TransformProvider:
         source_frame: Union[str, CoordinateFrames],
         target_frame: Union[str, CoordinateFrames],
         time: rospy.Time = rospy.Time(0),
-        timeout: rospy.Duration = rospy.Duration(0.0),
+        timeout: rospy.Duration = rospy.Duration(0),
     ) -> np.ndarray:
         if isinstance(source_frame, CoordinateFrames):
             source_frame = self._mapping[source_frame]
@@ -69,13 +69,13 @@ class TransformProvider:
         from ros_numpy import numpify
         return numpify(transform.transform)
     
-    def named_transform(self, name: str) -> np.ndarray:
+    def named_transform(self, name: str, time: rospy.Time = rospy.Time(0)) -> np.ndarray:
         try:
             source, _, target = name.upper().split('_')
         except ValueError:
             raise ValueError(f"Invalid transform name: {name}. Expected format: <source>_to_<target>.")
         
-        return self.lookup_transform(source_frame=CoordinateFrames[source], target_frame=CoordinateFrames[target])
+        return self.lookup_transform(source_frame=CoordinateFrames[source], target_frame=CoordinateFrames[target], time=time)
 
     def get_transform_vehicle_to_world(self) -> np.ndarray:
         return self.lookup_transform(source_frame=CoordinateFrames.VEHICLE, target_frame=CoordinateFrames.WORLD)
@@ -85,7 +85,7 @@ class TransformProvider:
 
     @cache
     def get_transform_camera_to_vehicle(self) -> np.ndarray:
-        return self.lookup_transform(source_frame=CoordinateFrames.CAMERA, target_frame=CoordinateFrames.VEHICLE)
+        return self.lookup_transform(source_frame=CoordinateFrames.CAMERA, target_frame=CoordinateFrames.VEHICLE, timeout=rospy.Duration(1))
 
     @cache
     def get_transform_vehicle_to_camera(self) -> np.ndarray:

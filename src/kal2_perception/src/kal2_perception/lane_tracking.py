@@ -5,8 +5,12 @@ import rospy
 import time
 import cv2 as cv
 
+from scipy.spatial import KDTree
 from numba import njit
 from itertools import product
+from functools import cached_property
+
+from kal2_perception.ransac import RansacLaneFinder
 
 
 class LaneSegment:
@@ -61,6 +65,9 @@ class LaneSegment:
 
         return np.concatenate(self._projected_observations, axis=1)
 
+    def predict(self, position):
+        self._pose[:2] = 0.9 * self._pose[:2] + 0.1 * position
+
     def observe(self, features: np.ndarray):
         if features.ndim != 2 or features.shape[0] != 4:
             raise ValueError(f"Features must be a 4xN array, got {features.shape}.")
@@ -81,6 +88,7 @@ class LaneSegment:
         #     self._projected_observations.append(proj_centers[:, i])
 
         from scipy.spatial.distance import cdist
+
         weights = cdist(self.position.T, proj_centers.T, metric="mahalanobis", VI=np.eye(2))
         # print(weights.shape, weights.T.reshape(-1).shape, proj_centers.shape)
 
@@ -116,149 +124,290 @@ class LaneSegment:
         ).T
 
         return (self.rotation_matrix @ corners) + self.position
-    
-
-def search_coefficients(image: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray, d: np.ndarray):
-    acc_shape = (len(a), len(b), len(c), len(d))
-    accumulator = np.zeros(acc_shape, dtype=int)
-
-    resolution = 50
-    half_lane_wdith = (0.9 * resolution) // 2
 
 
-    x = np.linspace(0, image.shape[0]-2, image.shape[0])
-    
-    for ai, bi, ci, di in product(range(len(a)), range(len(b)), range(len(c)), range(len(d))):
-        y_pred = (a[ai] * x**3 + b[bi] * x**2 + c[ci] * x + d[di])
+def fit_polynomial_normals_only_ridge(features: np.ndarray, alpha: float, degree: int = 3):
+    features = features[:, np.abs(features[3]) > 0.5]
 
-        dy_dx = 3 * a[ai] * x**2 + 2 * b[bi] * x + c[ci]
-        normals = np.vstack((-dy_dx, np.ones_like(dy_dx)))
-        normals = normals / np.linalg.norm(normals, axis=0)
-        
-        y_pred_left = y_pred - half_lane_wdith * normals[1]
-        x_pred_left = x - half_lane_wdith * normals[0]
-        y_pred_right = y_pred + half_lane_wdith * normals[1]
-        x_pred_right = x + half_lane_wdith * normals[0]
+    X = np.vander(features[0], degree)
+    X[:, 0] *= 3
+    X[:, 0] *= 2
 
-        template = np.zeros_like(image)
+    dx_dy = features[2] / features[3]
+    y = -dx_dy
 
-        def add_to_template(x, y_pred):
-            points = np.vstack((y_pred, x)).astype(int).T
-            cv.polylines(template, [points], isClosed=False, color=255, thickness=2)
+    A = np.eye(degree, dtype=np.float64) * alpha
+    A[-1, -1] = 0
 
-        add_to_template(x, y_pred)
-        add_to_template(x_pred_left, y_pred_left)
-        add_to_template(x_pred_right, y_pred_right)
+    return np.linalg.inv(np.dot(X.T, X) + A).dot(X.T).dot(y)
 
-        accumulator[ai, bi, ci, di] = np.sum(cv.bitwise_and(image, template))
-
-    max_indices = np.unravel_index(np.argmax(accumulator), acc_shape)
-    
-    best_a = a[max_indices[0]]
-    best_b = b[max_indices[1]]
-    best_c = c[max_indices[2]]
-    best_d = d[max_indices[3]]
-    
-    return best_a, best_b, best_c, best_d
-
-from typing import NamedTuple
-from numba import prange, njit
-
-class SearchSpace(NamedTuple):
-    a: float
-    b: float
-    c: float
-    d: float
-
-    @property
-    def shape(self):
-        return (len(self.a), len(self.b), len(self.c), len(self.d))
-
-@njit(parallel=True)
-def search_coefficients_impl(image: np.ndarray, accumulator: np.ndarray, search_space: SearchSpace, lane_width: int, max_distance: int):
-    points = np.where(image == 255)
-
-    half_lane_width = lane_width // 2
-
-    xs = points[0]
-    ys = points[1]
-
-    for ai in prange(len(search_space.a)):
-        for bi in range(len(search_space.b)):
-            for ci in range(len(search_space.c)):
-                for di in range(len(search_space.d)):
-                    a, b, c, d = search_space.a[ai], search_space.b[bi], search_space.c[ci], search_space.d[di]
-
-                    y_pred_center = a * xs**3 + b * xs**2 + c * xs + d
-                    y_pred_left = a * xs**3 + b * xs**2 + c * xs + d + half_lane_width
-                    y_pred_right = a * xs**3 + b * xs**2 + c * xs + d - half_lane_width
-
-                    diff_center = np.abs(ys - y_pred_center)
-                    diff_left = np.abs(ys - y_pred_left)
-                    diff_right = np.abs(ys - y_pred_right)
-                    score = np.sum(diff_center < max_distance) + np.sum(diff_left < max_distance) + np.sum(diff_right < max_distance)
- 
-                    accumulator[ai, bi, ci, di] = score
-
-
-
-def search_coefficients_nb(image: np.ndarray, search_space: SearchSpace, lane_width: int = 100, max_distance: int = 5):
-    accumulator = np.zeros(search_space.shape, dtype=np.int64)
-
-    search_coefficients_impl(image, accumulator, search_space, lane_width, max_distance)
-    
-    max_indices = np.unravel_index(np.argmax(accumulator), search_space.shape)
-    
-    best_a = search_space.a[max_indices[0]]
-    best_b = search_space.b[max_indices[1]]
-    best_c = search_space.c[max_indices[2]]
-    best_d = search_space.d[max_indices[3]]
-    
-    return best_a, best_b, best_c, best_d
-    
 
 def detect_lane(points: np.ndarray, lane_width: float = 0.9, radius: float = 0.5):
     from kal2_perception.birds_eye_view import rasterize_points, VoxelConfig
 
-    resolution=25
+    resolution = 25
     config = VoxelConfig(resolution=resolution, x_min=0, x_max=radius, y_min=-radius, y_max=radius)
     points3d = np.vstack((points, np.zeros(points.shape[1]))).T
-    print(points3d.shape)
     grid = rasterize_points(points3d, config)
     grid = (grid > 0).astype(np.uint8) * 255
 
-    print(grid.shape)
-    y0 = grid.shape[1] // 2
+    color_grid = cv.cvtColor(grid, cv.COLOR_GRAY2BGR)
 
-    a = np.linspace(-1, 1, 11) / (resolution * 1.0)**2
-    b = np.linspace(-1, 1, 11) / (resolution * 1.0)
-    c = np.linspace(-1, 1, 11)
-    d = y0 + np.linspace(-10, 10, 11)
+    # print(grid.shape)
+    # y0 = grid.shape[1] // 2
 
-    coefficients = search_coefficients_nb(grid, SearchSpace(a, b, c, d), lane_width=resolution, max_distance=2)
+    # a = np.linspace(-1, 1, 11) / (resolution * 1.0)**2
+    # b = np.linspace(-1, 1, 11) / (resolution * 1.0)
+    # c = np.linspace(-1, 1, 11)
+    # d = y0 + np.linspace(-10, 10, 11)
 
-    x = np.linspace(0, grid.shape[0]-1, grid.shape[0]).astype(int)
-    y = (coefficients[0] * x**3 + coefficients[1] * x**2 + coefficients[2] * x + coefficients[3]).astype(int)
+    # coefficients = search_coefficients_nb(grid, SearchSpace(a, b, c, d), lane_width=resolution, max_distance=2)
 
-    dy_dx = 3 * coefficients[0] * x**2 + 2 * coefficients[1] * x + coefficients[2]
-    normals = np.vstack((-dy_dx, np.ones_like(dy_dx)))
-    normals = normals / np.linalg.norm(normals, axis=0)
+    # x = np.linspace(0, grid.shape[0]-1, grid.shape[0]).astype(int)
+    # y = (coefficients[0] * x**3 + coefficients[1] * x**2 + coefficients[2] * x + coefficients[3]).astype(int)
 
-    half_lane_wdith = (0.9 * resolution) // 2
+    # dy_dx = 3 * coefficients[0] * x**2 + 2 * coefficients[1] * x + coefficients[2]
+    # normals = np.vstack((-dy_dx, np.ones_like(dy_dx)))
+    # normals = normals / np.linalg.norm(normals, axis=0)
+
+    # half_lane_wdith = (0.9 * resolution) // 2
+
+    # y_pred_left = y - half_lane_wdith * normals[1]
+    # x_pred_left = x - half_lane_wdith * normals[0]
+    # y_pred_right = y + half_lane_wdith * normals[1]
+    # x_pred_right = x + half_lane_wdith * normals[0]
+
+    # cv.polylines(grid, [np.vstack((y, x)).T], isClosed=False, color=255, thickness=2)
+    # cv.polylines(grid, [np.vstack((y_pred_left, x_pred_left)).astype(int).T], isClosed=False, color=255, thickness=2)
+    # cv.polylines(grid, [np.vstack((y_pred_right, x_pred_right)).astype(int).T], isClosed=False, color=255, thickness=2)
+    # coefficients = None
+    from kal2_perception.ransac import RansacLaneFinder
+
+    ransac = RansacLaneFinder(lane_width=0.9, alpha=1, num_iterations=500)
+    coeffs = ransac.find_lanes(points)
+
+    x = np.linspace(points[0].min(), points[0].max(), 20)
+    y = np.polyval(coeffs, x)
+
+    lane_points = np.vstack((x, y, np.zeros_like(x)))
+    lane = rasterize_points(lane_points.T, config)
+    color_grid[lane != 0] = (127, 255, 255)
+
+    from sklearn.cluster import DBSCAN
+
+    db = DBSCAN(eps=0.15, min_samples=20).fit(points.T)
+    labels = db.labels_
+
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
+
+    for label in np.unique(labels)[1:6]:
+        cluster = rasterize_points(points3d[labels == label], config)
+        color_grid[cluster != 0] = colors[label]
+
+    coefficients = coeffs
+    return coefficients, color_grid
+
+
+class Observation:
+    def __init__(self, id: int, pose: np.ndarray, features: np.ndarray):
+        self._pose = pose
+        self._features = features
+        self._curve = None
+        self._id = id
+        self._predicted_centers = []
+
+    def update_curve(self, curve: np.ndarray):
+        self._curve = curve
+
+    def predict(self, positions):
+        R_inv = np.linalg.inv(self.pose[:2, :2])
+        t = self.position.reshape(2, 1)
+
+        relative_position = R_inv @ (positions - t)
+
+        x_min, x_max, y_min, y_max = self.get_bounding_box()
+        mask = (
+            (relative_position[0] > x_min)
+            & (relative_position[0] < x_max)
+            & (relative_position[1] > y_min)
+            & (relative_position[1] < y_max)
+        )
+
+        coeffs = self._curve.copy()
+        coeffs[-1] = 0
+
+        ys = np.polyval(coeffs, relative_position[0])
+
+        # offset = R_inv @ (self.predicted_center - t)
+        relative_predictions = np.vstack((relative_position[0], ys))
+
+        predictions = (self.pose[:2, :2] @ relative_predictions) + t
+        predictions[:, ~mask] = np.nan
+        return predictions
     
-    y_pred_left = y - half_lane_wdith * normals[1]
-    x_pred_left = x - half_lane_wdith * normals[0]
-    y_pred_right = y + half_lane_wdith * normals[1]
-    x_pred_right = x + half_lane_wdith * normals[0]
+    def predict_all(self):
+        x_min, x_max, _, _ = self.get_bounding_box()
 
-    cv.polylines(grid, [np.vstack((y, x)).T], isClosed=False, color=255, thickness=2)
-    cv.polylines(grid, [np.vstack((y_pred_left, x_pred_left)).astype(int).T], isClosed=False, color=255, thickness=2)
-    cv.polylines(grid, [np.vstack((y_pred_right, x_pred_right)).astype(int).T], isClosed=False, color=255, thickness=2)
-    coefficients = None
+        xs = np.linspace(x_min, x_max, 20)
+        coeffs = self._curve.copy()
+        coeffs[-1] = 0
 
-    return coefficients, grid
+        ys = np.polyval(coeffs, xs)
+
+        # offset = R_inv @ (self.predicted_center - t)
+        relative_predictions = np.vstack((xs, ys))
+
+        return (self.pose[:2, :2] @ relative_predictions) + self.position
+    
+    def observe(self, positions):
+        if np.any(np.isnan(positions)):
+            return
+        
+        self._predicted_centers.append(positions)
+
+    @property
+    def predicted_center(self):
+        if len(self._predicted_centers) == 0:
+            return self.position
+        predictions = np.array(self._predicted_centers).T
+        median = np.median(predictions, axis=1)
+        return median.reshape(2, 1)
+
+    @property
+    def pose(self):
+        return self._pose
+
+    @property
+    def position(self):
+        return self._pose[:2, 3].reshape(2, 1)
+
+    @property
+    def features(self):
+        return self._features
+
+    @cached_property
+    def relative_features(self):
+        R_inv = np.linalg.inv(self._pose[:2, :2])
+        t = self._pose[:2, 3].reshape(2, 1)
+
+        points = R_inv @ (self._features[:2] - t)
+        normals = R_inv @ self._features[2:]
+
+        return np.vstack((points, normals))
+
+    def get_bounding_box(self, relative: bool = True):
+        features = self.relative_features if relative else self.features
+        return features[0].min(), features[0].max(), features[1].min(), features[1].max()
 
 
+class ObservationAccumulator:
+    def __init__(self):
+        self._observations: List[Observation] = []
+
+    def save(self):
+        import pickle
+
+        with open("/home/josua/kal2_ws/src/kal2_perception/notebooks/observations.pickle", "wb") as fp:
+            pickle.dump(self._observations, fp)
+
+    def add_observation(self, pose: np.ndarray, features: np.ndarray):
+        if pose.shape != (4, 4):
+            raise ValueError(f"Expected pose to be a (4,4) matrix, got {pose.shape}.")
+
+        if features.ndim != 2 or features.shape[0] != 4:
+            raise ValueError(f"Expected features to have shape (4, N), got {features.shape}.")
+
+        self._observations.append(Observation(id=len(self._observations), pose=pose, features=features))
+
+        # if len(self._observations) == 300:
+        #     self.save()
+        #     rospy.logwarn("Saving observations...")
+
+    def get_nearby_points(self, pose: np.ndarray, radius: float, transform_to_local: bool = True):
+        if pose.shape != (4, 4):
+            raise ValueError(f"Expected pose to be a (4,4) matrix, got {pose.shape}.")
+        
+        observations = self.get_recent_nodes()
+
+        features = np.concatenate([observation.features for observation in observations], axis=1)
+        points = features[:2, :]
+        normals = features[2:, :]
+
+        R_inv = np.linalg.inv(pose[:2, :2])
+        t = pose[:2, 3].reshape(2, 1)
+
+        kdtree = KDTree(points.T)
+        indices = kdtree.query_ball_point(x=pose[:2, 3], r=radius)
+
+        if transform_to_local:
+            points = R_inv @ (points[:, indices] - t)
+            normals = R_inv @ normals[:, indices]
+        else:
+            points = points[:, indices]
+            normals = normals[:, indices]
+
+        return points, normals
+    
+    def get_recent_nodes(self, max_distance: float = 2):
+        n_nodes = len(self._observations)
+
+        if n_nodes == 0:
+            return []
+
+        position = self._observations[-1].pose[:2, 3]
+        recent_nodes = []
+
+        for index in range(1, n_nodes+1):
+            node = self._observations[-index]
+            dist = np.linalg.norm(node.pose[:2, 3] - position)
+
+            if dist > max_distance:
+                break
+
+            recent_nodes.append(node)
+
+        return recent_nodes
+
+
+
+    def estimate_lane(self, index: int = -1, radius: float = 3.0, lane_width: float = 0.9):
+        node = self._observations[index]
+
+        points, normals = self.get_nearby_points(node._pose, radius=radius)
+
+        ransac = RansacLaneFinder(lane_width=lane_width, alpha=1, num_iterations=500)
+        coeffs = ransac.find_lanes_with_normals(np.vstack((points, normals)))
+
+        node.update_curve(coeffs)
+
+    def predict_center_line(self, n: int = 20):
+        observations = self.get_recent_nodes()#self._observations[-n:]
+
+        positions = np.concatenate([node.position for node in observations], axis=1)
+
+        for i, node in enumerate(observations):
+            predictions = node.predict(positions[:, i:])
+
+            for other_node, prediction in zip(observations[i:], predictions.T):
+                other_node.observe(prediction)
+
+        current_pose = self._observations[-1].pose
+        center_points = np.hstack([observation.predict_all() for  observation in observations])
+        relative_points = np.linalg.inv(current_pose[:2, :2]) @ (center_points - current_pose[:2, 3].reshape(2, 1))
+
+        path = np.polyfit(relative_points[0], relative_points[1], deg=3)
+        path[-1] = 0
+
+        xs = np.linspace(-2, 2, 20)
+        ys = np.polyval(path, xs)
+        predicted_points = np.vstack((xs, ys))
+        predicted_points = current_pose[:2, :2] @ predicted_points + current_pose[:2, 3].reshape(2, 1)
+
+        # return np.hstack([observation.predicted_center for observation in observations])
+        return predicted_points
+    
+    def get_features(self, n_nodes: int):
+        return np.concatenate([observation.features for observation in self._observations[-n_nodes:]], axis=1)
 
 
 class LaneMap:
@@ -270,36 +419,37 @@ class LaneMap:
         self._look_ahead_distance = look_ahead_distance
         self._lane_segments: List[LaneSegment] = []
         self._features = []
+        self._observations = ObservationAccumulator()
 
         self._coefficients = None
+        self._center_line_points = []
 
         self._add_lane_segment(np.array(initial_pose))
+
+    @property
+    def features(self):
+        return self._observations.get_features(20)
 
     def _add_lane_segment(self, pose: Tuple[float, float, float]):
         self._lane_segments.append(LaneSegment(pose, self._lane_width, self._segment_length))
 
     def update(self, features: np.ndarray, vehicle_pose: np.ndarray):
         t0 = time.time()
-        self._features.append(features[:2])
-        points = np.concatenate(self._features, axis=1).T
 
-        current_position = vehicle_pose[:2, 3]
+        self._observations.add_observation(pose=vehicle_pose, features=features)
+        # points, normals = self._observations.get_nearby_points(vehicle_pose, radius=3.0)
+        self._observations.estimate_lane()
+        center_points = self._observations.predict_center_line()
 
-        from scipy.spatial import KDTree
-        kdtree = KDTree(points)
+        # coeffs, grid = detect_lane(points, lane_width=self._lane_width, radius=2)
+        return center_points
 
-        indices = kdtree.query_ball_point(x=current_position, r=3)
-        nearby_points = np.linalg.inv(vehicle_pose[:2, :2]) @ (points[indices].T - current_position.reshape(2, -1))
-        t1 = time.time()
-        print(f"KDTree took {t1 - t0:.3f}s\t n: {len(nearby_points)}/{len(points)}")
-
-
-        coeffs, grid = detect_lane(nearby_points, lane_width=self._lane_width, radius=2)
+        coeffs_normals = fit_polynomial_normals_only_ridge(acc_features, alpha=1)
+        coeffs_normals = np.hstack((coeffs_normals, 0))
+        # coeffs=np.mean(np.vstack((coeffs, coeffs_normals)), axis=0)
+        coeffs = coeffs_normals
         t2 = time.time()
         print(f"Detect lane took {t2 - t1:.3f}s")
-
-
-        return grid
 
         last_segment = self._lane_segments[-1]
         current_position = (vehicle_pose @ np.array([[0], [0], [0], [1]]))[:2]
@@ -324,35 +474,61 @@ class LaneMap:
         if len(features) == 0:
             return
 
+        # if np.abs(coeffs[3] - 0.25) > 0.3:
+        #     coeffs[3] -= np.sign(coeffs[3]) * self._lane_width // 2
+
+        print(coeffs[3])
+
+        coeffs[3] = 0.25
+
+        x_min = nearby_points[0].min()
+        x_max = nearby_points[0].max()
+        x_pred = np.linspace(x_min, x_max, 20)
+        y_pred = np.polyval(coeffs, x_pred)
+        pred = vehicle_pose[:2, :2] @ np.vstack((x_pred, y_pred)) + current_position.reshape(2, -1)
+        print(pred.shape)
+        self._center_line_points.append(pred.T)
+
+        # for segment in self._lane_segments:
+        #     relative_position = np.linalg.inv(vehicle_pose[:2, :2]) @ (segment.position - current_position.reshape(2, -1))
+        #     if x_min <= relative_position[0] <= x_max:
+        #         y_pred = np.polyval(coeffs, relative_position[0])
+        #         rel_predicted_position = np.array((relative_position[0], y_pred)).reshape(2, -1)
+        #         predicted_position = vehicle_pose[:2, :2] @ rel_predicted_position + current_position.reshape(2, -1)
+        #         print(predicted_position.shape)
+        #         segment.predict(predicted_position.T)
+
         n = min(10, len(self._lane_segments))
 
         for segment in self._lane_segments[-n:]:
             segment.observe(features)
 
-        observations = [segment.observations for segment in self._lane_segments[-n:]]
+        # observations = [segment.observations for segment in self._lane_segments[-n:]]
 
-        for index in range(n):
-            current_segement = self._lane_segments[-n+index]
-            visible_observations = np.concatenate(observations[index:], axis=1)
+        # for index in range(n):
+        #     current_segement = self._lane_segments[-n+index]
+        #     visible_observations = np.concatenate(observations[index:], axis=1)
 
-            if visible_observations.shape[1] < 50:
-                continue
+        #     if visible_observations.shape[1] < 50:
+        #         continue
 
-            rel_visible_observations = np.linalg.inv(current_segement.rotation_matrix) @ (
-                visible_observations - current_segement.position
-            )
-            try:
-                poly = np.polynomial.Polynomial.fit(rel_visible_observations[0], rel_visible_observations[1], 3)
-            except np.linalg.LinAlgError:
-                continue
+        #     rel_visible_observations = np.linalg.inv(current_segement.rotation_matrix) @ (
+        #         visible_observations - current_segement.position
+        #     )
+        #     try:
+        #         poly = np.polynomial.Polynomial.fit(rel_visible_observations[0], rel_visible_observations[1], 3)
+        #     except np.linalg.LinAlgError:
+        #         continue
 
-            # print(f"x min: {rel_visible_observations[0].min()}, max: {rel_visible_observations[0].max()}")
+        #     # print(f"x min: {rel_visible_observations[0].min()}, max: {rel_visible_observations[0].max()}")
 
-            # print(rel_visible_observations[0].max())
-            if rel_visible_observations[0].max() < 1.0:
-                continue
+        #     # print(rel_visible_observations[0].max())
+        #     if rel_visible_observations[0].max() < 1.0:
+        #         continue
 
-            x = np.linspace(0, 1.0, 10)
-            y = poly(x)
-            predicted_path = current_segement.rotation_matrix @ np.vstack((x, y)) + current_segement.position
-            current_segement.predicted_path = predicted_path
+        #     x = np.linspace(0, 1.0, 10)
+        #     y = poly(x)
+        #     predicted_path = current_segement.rotation_matrix @ np.vstack((x, y)) + current_segement.position
+        #     current_segement.predicted_path = predicted_path
+
+        return grid
