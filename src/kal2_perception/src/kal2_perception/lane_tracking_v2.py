@@ -10,6 +10,7 @@ from numba import njit
 import rospy
 import logging
 import warnings
+import pickle
 
 from sklearnex import patch_sklearn
 patch_sklearn()
@@ -21,7 +22,7 @@ from sklearn.preprocessing import PolynomialFeatures
 from sklearn.cluster import DBSCAN
 from sklearn.linear_model import Ridge
 
-from kal2_perception.lane_model import PolynomialFilterV3, PolynomialFilter
+from kal2_perception.lane_model import PolynomialFilterV4
 from kal2_perception.ransac import RansacLaneFinder
 
 NUMBA_USE_CACHE=True
@@ -91,10 +92,10 @@ class LeastSquaresLaneFinder:
     def __init__(self, lane_width: float, alpha: float = 0.1) -> None:
         self._alpha = alpha
         self._beta = 1.5
-        self._epsilon = 0.25
+        self._epsilon = 0.2
         self._degree = 3
 
-    def _fit_polynomial(self, points: np.ndarray, labels: np.ndarray, unique_labels: np.ndarray, guess: Optional[np.ndarray]):
+    def _fit_polynomial(self, points: np.ndarray, labels: np.ndarray, unique_labels: np.ndarray):
         n_clusters = len(unique_labels)
 
         if n_clusters == 0:
@@ -117,7 +118,7 @@ class LeastSquaresLaneFinder:
         
         return reg.coef_.reshape((n_clusters, self._degree + 1))
 
-    def find_lanes(self, points: np.ndarray, normals: np.ndarray, guess) -> np.ndarray:
+    def find_lanes(self, points: np.ndarray, normals: np.ndarray, return_debug: bool = False) -> np.ndarray:
         features = np.vstack((points, normals))
         poly_features = PolynomialFeatures(degree=2).fit_transform(features.T)
 
@@ -136,20 +137,27 @@ class LeastSquaresLaneFinder:
         skip = max(len(valid_labels) // 200, 1)
         unique_labels = np.unique(valid_labels[::skip])
 
-        coeffs = self._fit_polynomial(clustered_points[:, ::skip], valid_labels[::skip], unique_labels, guess=guess)
+        coeffs = self._fit_polynomial(clustered_points[:, ::skip], valid_labels[::skip], unique_labels)
 
-        return np.median(coeffs, axis=0)
+        if return_debug:
+            return np.mean(coeffs, axis=0), clustered_points[:, ::skip], valid_labels[::skip], coeffs
+        
+        return np.mean(coeffs, axis=0)
 
 class LaneMap:
     def __init__(self, initial_pose, lane_width: float = 0.9, look_ahead_distance: float = 3.0):
         self._lane_width: float = lane_width
         self._look_ahead_distance: float = look_ahead_distance
         self._observations: List[Observation] = []
-        self._filter = PolynomialFilter(initial_pose)
+        self._filter = PolynomialFilterV4(initial_pose=None)
         self._center_line = []
 
         self._coefficients = None
         self._center_line_points = []
+
+    def save(self, path):
+        with open(path, 'wb') as file:
+            pickle.dump(obj=self._observations, file=file)
 
     def get_features(self, n_nodes: int):
         return np.concatenate([o.features for o in self._observations[-n_nodes:]], axis=1)
@@ -181,7 +189,6 @@ class LaneMap:
         return center_points
 
     def update(self, features: np.ndarray, vehicle_pose: np.ndarray):
-        t0 = time.time()
         self._observations.append(Observation(pose=vehicle_pose, features=features))
 
         x, y = vehicle_pose[:2, 3]
@@ -191,8 +198,8 @@ class LaneMap:
         recents_observations = self.get_recent_observations()
         recent_features = np.concatenate([o.features for o in recents_observations], axis=1)
 
-        R = self._filter.state.roation_matrix
-        t = self._filter.state.translation
+        R = vehicle_pose[:2, :2]
+        t = vehicle_pose[:2, 3].reshape(2, 1)
         local_points = np.linalg.inv(R) @ (recent_features[:2] -t)
 
         mask  = (local_points[0] > -1.0) & (local_points[0] < 1.0) & (local_points[1] > -1.5) & (local_points[1] < 1.5)
@@ -204,14 +211,13 @@ class LaneMap:
         lane_finder = LeastSquaresLaneFinder(lane_width=self._lane_width)
 
         try:
-            coeffs = lane_finder.find_lanes(local_points[:, mask], local_normals, guess=self._filter.state.coeffs)
+            coeffs = lane_finder.find_lanes(local_points[:, mask], local_normals)
         except ValueError as e:
             rospy.logerr(e)
             return self._make_center_line()
-
-        t1 = time.time()
-            
-        self._filter.update(coeffs)
+        
+        a, b, c, d = tuple(coeffs)
+        self._filter.update(np.array([d, c, b, a]))
         self._center_line.append(self._filter.state.translation.T)
 
         return self._make_center_line()
