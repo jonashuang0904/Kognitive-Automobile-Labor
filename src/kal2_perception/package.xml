@@ -36,6 +36,25 @@
   <!--   Note that this is equivalent to the following: -->
   <!--   <build_depend>roscpp</build_depend> -->
   <exec_depend>rospy</exec_depend>
+  <exec_depend>python3-open3d-pip</exec_depend>
+  <exec_depend>python3-onnxruntime-openvino-pip</exec_depend>
+  <exec_depend>python3-onnxruntime-pip</exec_depend>
+  <exec_depend>python3-sklearn</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-numba</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-sympy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-skimage</exec_depend>
+  <exec_depend>python3-pytest</exec_depend>
+  <!-- <exec_depend></exec_depend>
+  <exec_depend></exec_depend>
+  <exec_depend></exec_depend>
+  <exec_depend></exec_depend> -->
+
+  <!-- sklearnex -->
+
+
   <!-- Use build_depend for packages you need at compile time: -->
   <!--   <build_depend>message_generation</build_depend> -->
   <!-- Use build_export_depend for packages you need in order to build against this package: -->
