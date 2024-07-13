@@ -41,50 +41,77 @@ class ClothoidState:
         return np.array([self.k1 / 6, self.k0 / 2, 0, 0])
 
 
-def wrap(alpha):
+def _wrap_angle(alpha):
     return (alpha + np.pi) % (2.0 * np.pi) - np.pi
 
 
-class PolynomialFilter:
+@dataclass
+class Pose2D:
+    x: float
+    y: float
+    theta: float
+
+    @property
+    def rotation_matrix(self):
+        return np.array([[np.cos(self.theta), -np.sin(self.theta)], [np.sin(self.theta), np.cos(self.theta)]])
+
+    @property
+    def translation(self):
+        return np.array([[self.x], [self.y]])
+
+    def as_array(self):
+        return np.array([self.x, self.y, self.theta])
+
+    @staticmethod
+    def from_array(pose: np.ndarray):
+        return Pose2D(*tuple(pose))
+
+
+class PolynomialFilterV4:
     def __init__(self, initial_pose: np.ndarray) -> None:
-        self._symbolic_state = sp.symbols("x y theta k0 k1")
-        self._symbolic_input = sp.symbols("px py")
-        self._numeric_state = np.array([initial_pose[0], initial_pose[1], initial_pose[2], 0.0, 0.0])
-        self._state_covariance = np.eye(5) * 0.1
+        dlat, tan_theta, k0, k1 = sp.symbols("dlat tan_theta k0 k1")
+        delta_x, delta_y, delta_theta = sp.symbols("Delta_x Delta_y Delta_theta")
+        a, b, c, d = sp.symbols("a, b, c, d")
 
-        x, y, theta, k0, k1 = self._symbolic_state
-        px, py = self._symbolic_input
+        s = delta_x
+        dlat_next = dlat + tan_theta * s + (k0 / 2) * s**2 + (k1 / 6) * s**3 - delta_y
 
-        dlong = (px - x) * sp.cos(theta) + (py - y) * sp.sin(theta)
-        dlat = (k1 / 6) * dlong**3 + (k0 / 2) * dlong
-        s_appox = sp.sqrt((px - x) ** 2 + (py - y) ** 2)
-
-        x_next = px
-        y_next = dlong * sp.sin(theta) + dlat * sp.cos(theta) + y
-        theta_next = theta + sp.atan(k0 * s_appox + 0.5 * k1 * s_appox**2)
-        k0_next = k0 + k1 * s_appox
+        theta_next = tan_theta + k0 * s + 0.5 * k1 * s**2 - sp.tan(delta_theta)
+        k0_next = k0 + k1 * s
         k1_next = k1
 
-        self._state_transition = sp.Matrix([x_next, y_next, theta_next, k0_next, k1_next])
-        self._state_transition_function = sp.lambdify([x, y, theta, k0, k1, px, py], self._state_transition)
-        self._state_transition_jacobian = sp.derive_by_array(self._state_transition, [x, y, theta, k0, k1])
-        self._state_transition_jacobian_function = sp.lambdify(
-            [x, y, theta, k0, k1, px, py], self._state_transition_jacobian
-        )
+        self._x = sp.Matrix([dlat, tan_theta, k0, k1])
+        self._u = sp.Matrix([delta_x, delta_y, delta_theta])
+        self._z = sp.Matrix([d, c, b, a])
 
-    def _compute_state_transition(self, px, py):
-        x, y, theta, k0, k1 = tuple(self._numeric_state)
-        return self._state_transition_function(x, y, theta, k0, k1, px, py)
+        self._state_transition_eq = sp.Matrix([dlat_next, theta_next, k0_next, k1_next])
+        self._state_transition = sp.lambdify([self._x, self._u], self._state_transition_eq)
+        self._Fx = sp.lambdify([self._x, self._u], self._state_transition_eq.jacobian(self._x))
+        self._Fu = sp.lambdify([self._x, self._u], self._state_transition_eq.jacobian(self._u))
 
-    def _compute_state_transition_jacobian(self, px, py):
-        x, y, theta, k0, k1 = tuple(self._numeric_state)
-        F = self._state_transition_jacobian_function(x, y, theta, k0, k1, px, py)
-        return np.asarray(F).squeeze()
+        self._measurement_eq = sp.Matrix([dlat, tan_theta, k0/2, k1/6])
+        self._predict_measurement = sp.lambdify([self._x], self._measurement_eq)
+        self._Hx = sp.lambdify([self._x, self._z], self._measurement_eq.jacobian(self._x))
+
+        self._state = np.zeros(4)
+        self._state_covariance = np.eye(4)
+        self._Q = np.diag([1, 1, 1])
+        self._R = np.diag([0.002, 0.001, 0.0001, 0.00001])
+
+        self._last_pose = Pose2D.from_array(initial_pose) if initial_pose is not None else None
+
+    def display_equations(self):
+        from IPython.display import Latex, display
+        display(Latex(rf"""$$f(x, u) = {sp.latex(self._state_transition_eq)},
+                       \quad \frac{{\partial f(x,u)}}{{\partial x}} = {sp.latex(self._state_transition_eq.jacobian(self._x))},
+                       \quad \frac{{\partial f(x,u)}}{{\partial u}} = {sp.latex(self._state_transition_eq.jacobian(self._u))}$$"""))
+        display(Latex(rf"""$$h(x) = {sp.latex(self._measurement_eq)},
+                       \quad H = {sp.latex(self._measurement_eq.jacobian(self._x))}$$"""))
 
     @property
     def state(self):
-        x, y, theta, k0, k1 = tuple(self._numeric_state)
-        return ClothoidState(x, y, theta, k0, k1)
+        y, theta, k0, k1 = tuple(self._state)
+        return ClothoidState(0, y, theta, k0, k1)
 
     @property
     def covariance(self):
@@ -92,86 +119,36 @@ class PolynomialFilter:
 
     def eval(self, xs: np.ndarray) -> np.ndarray:
         ys = np.polyval(self.state.coeffs, xs)
-        return self.state.roation_matrix @ np.vstack(tup=(xs, ys)) + self.state.translation
+        return self._last_pose.rotation_matrix @ np.vstack(tup=(xs, ys)) + self._last_pose.translation
 
     def predict(self, new_pose: np.ndarray):
-        px, py = new_pose[0], new_pose[1]
-        x_next = self._compute_state_transition(px, py).flatten()
-        x_next[2] = wrap(x_next[2])
-        self._numeric_state = x_next
+        if self._last_pose is None:
+            self._last_pose = Pose2D.from_array(new_pose)
+            return
 
-        F = self._compute_state_transition_jacobian(px, py)
-        P = self._state_covariance
-        self._state_covariance = F @ P @ F.T + np.eye(5) * 0.1
+        R = self._last_pose.rotation_matrix
 
-    def update(self, new_coeffs: np.ndarray):
-        x, y, theta = tuple(self._numeric_state[:3])
+        u = new_pose - self._last_pose.as_array() #TODO: check if angle needs to be wrapped.
+        u[:2] = (R.T @ u[:2].reshape(2, 1)).flatten()
 
-        a, b, c, d = tuple(new_coeffs)
-        z_x = x - np.sin(theta) * d
-        z_y = y + np.cos(theta) * d
-        z_theta = theta + np.arctan2(c, 1)
-        k0 = 2 * b
-        k1 = 6 * a
+        x_next = self._state_transition(self._state, u).flatten()
+        self._state = x_next
+
+        Fx = self._Fx(self._state, u)
+        Fu = self._Fu(self._state, u)
 
         P = self._state_covariance
-        H = np.eye(5)
-        R = np.eye(5) * 0.1
-        K = P @ H.T @ np.linalg.inv(H @ P @ H.T + R)
-        y = np.array([z_x, z_y, z_theta, k0, k1]) - self._numeric_state
-        y[2] = wrap(y[2])
+        self._state_covariance = Fx @ P @ Fx.T + Fu @ self._Q @ Fu.T
+        self._last_pose = Pose2D.from_array(new_pose)
 
-        self._numeric_state += K @ y
-        self._numeric_state[2] = wrap(self._numeric_state[2])
-        self._state_covariance = (np.eye(5) - K @ H) @ self._state_covariance
+    def update(self, z: np.ndarray):
+        Hx = self._Hx(self._state, z)
 
+        z_pred = self._predict_measurement(self._state).flatten()
 
-class PolynomialFilterV3:
-    def __init__(self, initial_pose) -> None:
-        self._state = ClothoidState(x=initial_pose[0], y=initial_pose[1], theta=initial_pose[2], k0=0, k1=0)
-        self._current_vehicle_pose = initial_pose
+        P = self._state_covariance
+        K = P @ Hx.T @ np.linalg.inv(Hx @ P @ Hx.T + self._R)
+        y = z - z_pred
 
-    def eval(self, xs: np.ndarray) -> np.ndarray:
-        return np.polyval(self._state.coeffs, xs)
-
-    def eval_world(self, xs: np.ndarray) -> np.ndarray:
-        ys = np.polyval(self._state.coeffs, xs)
-        return self._state.roation_matrix @ np.vstack(tup=(xs, ys)) + np.vstack((self._state.x, self._state.y))
-
-    def to_lane_coordinates(self, points):
-        return np.linalg.inv(self._state.roation_matrix) @ (points - self._state.translation)
-
-    def to_world_coordinates(self, points):
-        return self._state.roation_matrix @ points + self._state.translation
-
-    @property
-    def state(self):
-        return self._state
-
-    def predict(self, new_pose: np.ndarray) -> None:
-        rel_translation = self.to_lane_coordinates(new_pose[:2, np.newaxis]).reshape(-1)
-        d_long, d_lat = rel_translation[0], rel_translation[1]
-
-        # x_center_line, y_center_line = closest_point_on_polynomial(coeffs=self._state.coeffs, x0=d_long, y0=d_lat, initial_guess=d_long)
-        x_center_line, y_center_line = d_long, self.eval(d_long)
-        new_origin = self.to_world_coordinates(points=np.vstack((x_center_line, y_center_line))).reshape(-1)
-        self._state.x = new_origin[0]
-        self._state.y = new_origin[1]
-
-        clothoid = ApproximateClothoid(self._state.k0, self._state.k1)
-
-        arc_length = np.sqrt(x_center_line**2 + y_center_line**2)
-        self._state.k0 = clothoid.curvature(arc_length=arc_length)
-        self._state.theta += np.arctan(clothoid.azimuth(arc_length=arc_length))
-
-        self._current_pose = new_pose
-
-    def update(self, coeffs):
-        a, b, c, d = coeffs
-
-        k0 = 2 * b
-        k1 = 6 * a
-
-        alpha = 0.90
-        self._state.k0 = alpha * self._state.k0 + (1 - alpha) * k0
-        self._state.k1 = alpha * self._state.k1 + (1 - alpha) * k1
+        self._state += K @  y
+        self._state_covariance = (np.eye(4) - K @ Hx) @ self._state_covariance
