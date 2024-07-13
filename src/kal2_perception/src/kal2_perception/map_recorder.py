@@ -87,12 +87,14 @@ class MapRecorderNode(NodeBase):
         return Path(self._rospack.get_path("kal2_perception"))
     
     def save(self, path: str):
-        stargazer = np.concatenate(self._accumulated_points_stargazer, axis=1)
-        stargazer_path = np.concatenate(self._stargazer_path, axis=1)
-        ekf = np.concatenate(self._accumulated_points_ekf, axis=1)
-        ekf_path = np.concatenate(self._ekf_path, axis=1)
-        print(ekf_path.shape)
-        np.savez(path, stargazer=stargazer, ekf=ekf, stargazer_path=stargazer_path, ekf_path=ekf_path)
+        try:
+            stargazer = np.concatenate(self._accumulated_points_stargazer, axis=1)
+            stargazer_path = np.concatenate(self._stargazer_path, axis=1)
+            ekf = np.concatenate(self._accumulated_points_ekf, axis=1)
+            ekf_path = np.concatenate(self._ekf_path, axis=1)
+            np.savez(path, stargazer=stargazer, ekf=ekf, stargazer_path=stargazer_path, ekf_path=ekf_path)
+        except ValueError as e:
+            rospy.logerr(e)
 
     def _features_callback(self, msg: PointCloud2):
         features3d = numpify(msg)
