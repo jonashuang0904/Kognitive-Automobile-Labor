@@ -3,9 +3,9 @@
 import rospy
 from contextlib import suppress
 
-from kal2_control.pid_controller_node import PIDControllerNode
+from kal2_control.main_controller_node import ControllerNode
 
 if __name__ == '__main__':
     with suppress(rospy.ROSInterruptException):
-        controller_node = PIDControllerNode()
+        controller_node = ControllerNode()
         rospy.spin()
