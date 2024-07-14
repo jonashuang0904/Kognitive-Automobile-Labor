@@ -1,7 +1,5 @@
 controller:
-  kp: 0.7
-  ki: 0.05
-  kd: 0.6
+
   speed: 0.5
   rate: 15
 

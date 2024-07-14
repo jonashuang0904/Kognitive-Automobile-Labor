@@ -3,9 +3,6 @@ from dataclasses import dataclass
 import rospy
 import numpy as np
 
-#from simple_pid import PID
-##from kal2_control.pid import PID
-
 from nav_msgs.msg import Path
 from tf2_ros import TransformListener, Buffer, LookupException, ExtrapolationException
 from tf.transformations import euler_from_quaternion
@@ -13,13 +10,11 @@ from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 from std_msgs.msg import Header
 from geometry_msgs.msg import TransformStamped
 
-##from kal2_control.pid import calculate_cte
+from kal2_control.pp_controller_node import PurePursuitController
+
 from kal2_util.node_base import NodeBase
 
-###from kal2_control.pure_pursuit_controler import PurePursuitController
-from kal2_control.pp_controler_josua import PurePursuitController
-
-# roslaunch command for own recorded path: roslaunch kal demo_path_follower.launch path_file:=/home/kal2/path.yaml
+# roslaunch command for own recorded path: roslaunch kal demo_path_follower.launch path_file:=/home/kal2/path_wholeloop_ic_smooved.yaml
 
 @dataclass
 class Pose2D:
@@ -61,17 +56,13 @@ class CarState:
         return msg
 
 
-class PIDControllerNode(NodeBase):
+class ControllerNode(NodeBase):
     def __init__(self):
         super().__init__(name="vehicle_control_node", log_level=rospy.DEBUG)
-        rospy.loginfo("Starting pid controller node...")
+        rospy.loginfo("Starting controller node...")
 
         controller_params = self.params.controller
-        #self._pid = PID(Kp=controller_params['kp'], Ki=controller_params['ki'], Kd=controller_params['kd'], setpoint=0.0
-        #)
-        ##self._pid = PID(Kp=controller_params['kp'], Ki=controller_params['ki'], Kd=controller_params['kd']
-        ##)
-
+       
         self._purePursuit = PurePursuitController()
 
         self._path_points = None
@@ -106,7 +97,7 @@ class PIDControllerNode(NodeBase):
         rospy.logdebug(f"Publishing control outputs: speed={self._car_state.speed:.02f}, steering_angle={self._car_state.steering_angle:.02f}.")
 
         msg = AckermannDriveStamped()
-        msg.header = Header(frame_id="vehicle_rear_axle", stamp=rospy.Time.now())  # TODO: check if necessary
+        msg.header = Header(frame_id="vehicle_rear_axle", stamp=rospy.Time.now())
         msg.drive = self._car_state.as_ackermann_msg()
         self._control_output_publisher.publish(msg)
 
@@ -123,13 +114,5 @@ class PIDControllerNode(NodeBase):
             rospy.logwarn_throttle(5, e)
             return
         
-        #cte = calculate_cte(current_pose.position, np.array(self._path_points).T)
-        #if np.isnan(cte):
-        #    rospy.logerr(f"Invalid cte: {cte}")
-        #   cte = 0
-
-        #self._car_state.steering_angle = self._pid(cte)
-        ##self._car_state.steering_angle = self._pid.control(cte, 1/15)
-        ###self._car_state.steering_angle = self._purePursuit.calculate_steeringangle(current_pose.yaw, current_pose.position, np.array(self._path_points).T)
         self._car_state.steering_angle = self._purePursuit.update(current_pose.rotation_matrix, current_pose.position, np.array(self._path_points).T)
         self._publish_control_output()
