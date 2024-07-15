@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5.1)
 
 set(MRT_PKG_VERSION 4.0.0)
-project(kal2_control)
+project(kal2_srvs)
 
 ###################
 ## Find packages ##
@@ -20,8 +20,8 @@ mrt_parse_package_xml()
 # This adds a python module if located under src/{PROJECT_NAME)
 mrt_python_module_setup()
 
-# mrt_add_service_files(srv)
-# generate_messages(DEPENDENCIES ${PROJECT_MESSAGE_DEPENDS})
+mrt_add_service_files(srv)
+generate_messages(DEPENDENCIES ${PROJECT_MESSAGE_DEPENDS})
 
 ###########
 ## Build ##
