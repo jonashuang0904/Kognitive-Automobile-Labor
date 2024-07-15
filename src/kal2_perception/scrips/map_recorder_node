@@ -1,21 +1,30 @@
 #! /usr/bin/env python3
 
-import rospy
 import time
 import atexit
 from contextlib import suppress
+
+import rospy
+
 from kal2_perception.map_recorder import MapRecorderNode
 
-node = MapRecorderNode()
+with suppress(rospy.ROSInterruptException):
+    node = MapRecorderNode()
 
-def exit_handler():
-    rospy.loginfo("Saving map..")
-    timestr = time.strftime("%Y%m%d-%H%M%S")
-    node.save(f"/home/josua/recorded_maps/map_{timestr}")
+    def exit_handler():
+        rospy.loginfo("Saving map..")
 
-if __name__ == "__main__":
+        path = node.package_path / "recorded_maps"
+        path.mkdir(exist_ok=True)
+
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        full_path = path / f"map_{timestamp}.npz"
+        node.save(str(full_path))
+        rospy.loginfo(f"Saved map to '{full_path}'.")
+
     atexit.register(exit_handler)
 
+
+if __name__ == "__main__":
     with suppress(rospy.ROSInterruptException):
         rospy.spin()
-        

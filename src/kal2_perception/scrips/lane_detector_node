@@ -1,10 +1,31 @@
 #! /usr/bin/env python3
 
-import rospy
+import time
+import atexit
+from pathlib import Path
 from contextlib import suppress
+
+import rospy
+
 from kal2_perception.lane_detector_node import LaneDetectorNode
+
+with suppress(rospy.ROSInterruptException):
+    node = LaneDetectorNode()
+
+    def exit_handler():
+        rospy.loginfo("Saving observations..")
+
+        path = node.package_path / "recorded_maps"
+        path.mkdir(exist_ok=True)
+
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        full_path = path / f"observations_{timestamp}.pickle"
+        node._lane_map.save(full_path)
+        rospy.loginfo(f"Saved observations to '{full_path}'.")
+
+    atexit.register(exit_handler)
+
 
 if __name__ == "__main__":
     with suppress(rospy.ROSInterruptException):
-        node = LaneDetectorNode()
         rospy.spin()

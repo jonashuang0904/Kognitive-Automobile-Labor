@@ -36,6 +36,29 @@
   <!--   Note that this is equivalent to the following: -->
   <!--   <build_depend>roscpp</build_depend> -->
   <exec_depend>rospy</exec_depend>
+  <exec_depend>python3-open3d-pip</exec_depend>
+  <exec_depend>python3-onnxruntime-openvino-pip</exec_depend>
+  <exec_depend>python3-onnxruntime-pip</exec_depend>
+  <exec_depend>python3-sklearn</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-numba</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-sympy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-skimage</exec_depend>
+
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf</exec_depend>
+  <exec_depend>ackermann_msgs</exec_depend>
+  <exec_depend>message_runtime</exec_depend>
+  <!-- sklearnex -->
+  <!-- cachetools -->
+  <!-- openvino -->
+
+  <test_depend>python3-pytest</test_depend>
+
+
   <!-- Use build_depend for packages you need at compile time: -->
   <!--   <build_depend>message_generation</build_depend> -->
   <!-- Use build_export_depend for packages you need in order to build against this package: -->
@@ -43,7 +66,6 @@
   <!-- Use buildtool_depend for build tool packages: -->
   <!--   <buildtool_depend>catkin</buildtool_depend> -->
   <!-- Use exec_depend for packages you need at runtime: -->
-  <!--   <exec_depend>message_runtime</exec_depend> -->
   <!-- Use test_depend for packages you need only for testing: -->
   <!--   <test_depend>gtest</test_depend> -->
   <!-- Use doc_depend for packages you need only for building documentation: -->
