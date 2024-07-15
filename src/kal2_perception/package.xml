@@ -56,9 +56,6 @@
   <!-- cachetools -->
   <!-- openvino -->
 
-  <test_depend>python3-pytest</test_depend>
-
-
   <!-- Use build_depend for packages you need at compile time: -->
   <!--   <build_depend>message_generation</build_depend> -->
   <!-- Use build_export_depend for packages you need in order to build against this package: -->
