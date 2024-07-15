@@ -29,7 +29,7 @@ class ParamHelper:
         return yaml.dump(self._get_param(self._ns), default_flow_style=False)
 
 
-class NodeBase(ABC):
+class NodeBase:
     def __init__(
         self, *, name: str, parameter_cache_time: float = 1, log_level: int = rospy.INFO
     ):
@@ -42,7 +42,6 @@ class NodeBase(ABC):
     def __shutdown(self):
         if self._active:
             self._active = False
-            self.stop()
 
     def run(self):
         rospy.spin()
