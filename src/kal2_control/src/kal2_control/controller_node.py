@@ -10,7 +10,7 @@ from ackermann_msgs.msg import AckermannDriveStamped, AckermannDrive
 from std_msgs.msg import Header
 from geometry_msgs.msg import TransformStamped
 
-from kal2_control.pp_controller_node import PurePursuitController
+from kal2_control.pure_pursuit import PurePursuitController
 
 from kal2_util.node_base import NodeBase
 
