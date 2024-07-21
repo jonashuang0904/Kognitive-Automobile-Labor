@@ -3,6 +3,7 @@
     <include file="$(find kal2_perception)/launch/lane_detector_node.launch"/>
     <include file="$(find kal2_perception)/launch/localization.launch"/>
     <include file="$(find kal2_control)/launch/main_controller.launch"/>
+    <include file="$(find kal2_perception)/launch/sign_detector_node.launch"/>
     
     <include file="$(find kal2_control)/launch/controller.launch"> 
         <!-- <arg name="recorded_path" value="$(find kal2_control)/recorded_paths/path_calculated.yaml" /> -->

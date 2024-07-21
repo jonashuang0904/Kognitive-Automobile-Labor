@@ -161,6 +161,7 @@ class ControllerNode(NodeBase):
                 v_max=self.params.map_vmax,
             )
         else:
+            rospy.loginfo("Using control points.")
             n_points = (int(self.params.n_points),)
             n_gap = (int(self.params.n_gap),)
             ct1 = (np.array([self.params.ct1_x, self.params.ct1_y]),)
