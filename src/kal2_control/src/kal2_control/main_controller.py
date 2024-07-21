@@ -12,8 +12,8 @@ from geometry_msgs.msg import PoseStamped, Point, Quaternion
 
 from ros_numpy import numpify  # type: ignore
 from kal2_util.node_base import NodeBase
-from kal2_control.state_machine import VehicleStateMachine, VehicleState, Zone, TargetCity, StatesLogger
-from kal2_msgs.msg import MainControllerState
+from kal2_control.state_machine import VehicleStateMachine, VehicleState, Zone, TargetCity, StatesLogger, TurningDirection
+from kal2_msgs.msg import MainControllerState, DetectedSign
 
 try:
     from kal2_srvs.srv import StartDriving
@@ -110,6 +110,7 @@ class MainControllerNode(NodeBase):
         self._marker_array_publisher = rospy.Publisher("/kal2/gates", MarkerArray, queue_size=10, latch=True)
 
         self._start_service = rospy.Service("start_driving", StartDriving, self._start_driving_handler)
+        self._sign_detection_subscriber = rospy.Subscriber("/kal2/detected_sign", DetectedSign, self._sign_detection_callback)
         self._timer = rospy.Timer(rospy.Duration.from_sec(0.1), callback=self._loop_callback)
 
         rospy.loginfo("Main controller node started.")
@@ -136,6 +137,7 @@ class MainControllerNode(NodeBase):
         msg.is_driving_cv = bool(self.vehicle_state.is_driving_cw)
         msg.is_initialized = self.vehicle_state.is_initialized
         msg.lap_counter = self._lap_counter
+        msg.turning_direction = self.vehicle_state.turning_direction.value
 
         self._state_publisher.publish(msg)
 
@@ -174,6 +176,29 @@ class MainControllerNode(NodeBase):
         self._sm.start_driving(target_city=target_city)
 
         return True
+    
+    def _sign_detection_callback(self, msg: DetectedSign):
+        if msg.city == "unknown":
+            return
+
+        try:
+            detected_city = TargetCity(msg.city)
+        except ValueError:
+            if msg.city in ["Koln", "Köln"]:
+                detected_city = TargetCity("Köln")
+            elif msg.city in ["Munchen", "München"]:
+                detected_city = TargetCity("Köln")
+            else:
+                rospy.logerr(f"Invalid city detected: {msg.city}")
+                return
+            
+        try:
+            turning_direction = TurningDirection(msg.direction)
+        except ValueError as e:
+            rospy.logerr(e)
+            return
+            
+        self._sm.sign_detected(detected_city, turning_direction)
 
     def _detect_current_zone(self, current_pose):
         current_position = current_pose[:2, 3]

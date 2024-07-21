@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <launch>
-    <!--<param name="/use_sim_time" value="true" /> -->
+    <param name="/use_sim_time" value="true" />
     <node name="sign_detector_node" ns="kal2" pkg="kal2_perception" type="sign_detector_node.py" output="screen">
         <param name="model_path" value="$(find kal2_perception)/models/mobilenetv2_sign_detection_final.onnx" />
         <env name="ROSCONSOLE_FORMAT" value="[${severity}] [${time}] [${node}]: ${message}"/>

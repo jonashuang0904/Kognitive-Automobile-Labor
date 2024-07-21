@@ -15,7 +15,7 @@ from geometry_msgs.msg import TransformStamped, PoseStamped, Point, Quaternion
 
 from kal2_control.pure_pursuit import PurePursuitController
 from kal2_control.stanley_controller import StanleyController
-from kal2_control.state_machine import Zone
+from kal2_control.state_machine import Zone, TurningDirection
 from kal2_control.trajectory_planning import create_trajectory_from_path
 from kal2_util.node_base import NodeBase
 from kal2_msgs.msg import MainControllerState # type: ignore
@@ -111,10 +111,15 @@ class ControllerNode(NodeBase):
         self._recorded_path = _load_recorded_path(self.params.recorded_path)
         self._recorded_lane = None
         self._path_points = None
+
         self._use_recorded_path = True
         self._is_initialized = False
         self._is_driving_cw = None
-        self._car_state = CarState(steering_angle=0, speed=controller_params['speed'])
+        self._is_turning = False
+        self._turning_direction = TurningDirection.Unknown
+        self._current_zone = Zone.RecordedZone
+
+        # self._car_state = CarState(steering_angle=0, speed=controller_params['speed'])
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer)
@@ -156,17 +161,23 @@ class ControllerNode(NodeBase):
             return
 
         self._use_recorded_path = zone in [Zone.RecordedZone, Zone.SignDetectionZone]
+        self._current_zone = zone
         self._is_driving_cw = msg.is_driving_cv
         self._is_initialized = msg.is_initialized
+        self._turning_direction = TurningDirection(msg.turning_direction)
 
     def _path_callback(self, msg: NavMsgPath):
         self._path_points = [_extract_xyz_from_pose(pose) for pose in msg.poses]
         
-    def _publish_control_output(self, speed) -> None:
+    def _publish_control_output(self, steering_angle: float, speed: float) -> None:
+        if np.isnan(steering_angle) or np.isnan(speed):
+            rospy.logerr(f"Speed or steering angle is nan: steering_angle={steering_angle}, speed={speed}")
+            return
+
         msg = AckermannDriveStamped()
         msg.header = Header(frame_id="vehicle_rear_axle", stamp=rospy.Time.now())
-        self._car_state.speed = speed
-        msg.drive = self._car_state.as_ackermann_msg()
+        msg.drive = CarState(steering_angle, speed).as_ackermann_msg()
+        # msg.drive = self._car_state.as_ackermann_msg()
         self._control_output_publisher.publish(msg)
 
     def _control_callback(self, _):
@@ -175,6 +186,7 @@ class ControllerNode(NodeBase):
             self._recorded_path_publisher.publish(self._recorded_lane)
 
         if not self._is_initialized:
+            rospy.loginfo_throttle(2, "Not initialized.")
             return
 
         if not self._use_recorded_path and (self._path_points is None or len(self._path_points) < 2):
@@ -186,12 +198,20 @@ class ControllerNode(NodeBase):
         except (LookupException, ExtrapolationException) as e:
             rospy.logwarn_throttle(5, e)
             return
-
-        self._use_recorded_path = True
+        
+        if self._turning_direction != TurningDirection.Unknown:
+            steering_angle = 10 if self._turning_direction == TurningDirection.Left else -10
+            rospy.loginfo(f"Turning: {steering_angle:.02f}")
+            self._publish_control_output(steering_angle=np.radians(steering_angle), speed=0.5)
+            return
 
         if not self._use_recorded_path:
             rospy.loginfo_throttle(1, "Using perception.")
         
         path = self.recorded_path[:, :3] if self._use_recorded_path else np.array(self._path_points)[:2]
-        self._car_state.steering_angle, speed = self._purePursuit.update(current_pose.rotation_matrix, current_pose.position, path.T)
-        self._publish_control_output(speed)
+        steering_angle, speed = self._purePursuit.update(current_pose.rotation_matrix, current_pose.position, path.T)
+        
+        if self._current_zone == Zone.SignDetectionZone:
+            speed = 0.25
+        
+        self._publish_control_output(steering_angle, speed)
