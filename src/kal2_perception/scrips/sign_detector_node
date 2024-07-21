@@ -7,4 +7,4 @@ from kal2_perception.sign_detector_node import SignDetectorNode
 if __name__ == "__main__":
     with suppress(rospy.ROSInterruptException):
         node = SignDetectorNode()
-        rospy.spin()
+        node.run()
