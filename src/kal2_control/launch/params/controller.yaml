@@ -1,7 +1,18 @@
 controller:
-
   speed: 0.75
   rate: 30
+
+turning_speed: 0.25
+sign_detection_speed: 0.25
+
+stanley_k: 0.5
+target_speed: 1.0
+look_ahead_index: 2
+use_adaptive_speed: false
+
+lane_offset: 0.2
+invert_path: false
+vehicle_frame: "base_link"
 
 control_output_topic: "/anicar/mux/ackermann_cmd_mux/input/path_follow"
 path_topic: "/kal2/trajectory"
