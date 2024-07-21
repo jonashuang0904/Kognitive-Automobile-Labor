@@ -35,3 +35,8 @@ setup.py
 CATKIN_IGNORE
 
 src/kal2_perception/notebooks/**
+src/kal2_perception/recorded_maps/
+src/kal2_perception/recorded_maps/**
+src/kal2_control/notebooks/
+src/kal2_control/notebooks/**
+src/kal2_perception/tesseract-build/

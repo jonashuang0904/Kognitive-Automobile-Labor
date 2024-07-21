@@ -7,10 +7,13 @@ import numpy as np
 import rospy
 from tf2_ros import TransformBroadcaster, Buffer, TransformListener, LookupException, ConnectivityException, ExtrapolationException  # type: ignore
 from visualization_msgs.msg import MarkerArray, Marker
+from std_msgs.msg import Header
+from geometry_msgs.msg import PoseStamped, Point, Quaternion
 
 from ros_numpy import numpify  # type: ignore
 from kal2_util.node_base import NodeBase
 from kal2_control.state_machine import VehicleStateMachine, VehicleState, Zone, TargetCity, StatesLogger
+from kal2_msgs.msg import MainControllerState
 
 try:
     from kal2_srvs.srv import StartDriving
@@ -83,16 +86,27 @@ class MainControllerNode(NodeBase):
         self._sm = VehicleStateMachine(VehicleState(), listeners=[StatesLogger()], allow_event_without_transition=True)
 
         self._initial_pose_estimator = InitialPoseEstimator(n_poses=5)
-        radius = 0.5
-        self._track_gates = [
-            TrackGate("LD1", Zone.LaneDetectionZone, np.array([4.0, 0.7]), radius=radius),
-            TrackGate("LD2", Zone.LaneDetectionZone, np.array([0.8, 2.0]), radius=radius),
-            TrackGate("SD1", Zone.SignDetectionZone, np.array([2.0, 4.0]), radius=radius),
-            TrackGate("SD2", Zone.SignDetectionZone, np.array([6.0, 2.2]), radius=radius),
-        ]
+        radius = self.params.gate_radius
+
+        if self.params.use_lane_detection:
+            self._track_gates = [
+                TrackGate("LD1", Zone.LaneDetectionZone, np.array([4.0, 0.7]), radius=radius),
+                TrackGate("LD2", Zone.LaneDetectionZone, np.array([0.8, 2.0]), radius=radius),
+                TrackGate("SD1", Zone.SignDetectionZone, np.array([2.0, 4.0]), radius=radius),
+                TrackGate("SD2", Zone.SignDetectionZone, np.array([6.0, 2.2]), radius=radius),
+            ]
+        else:
+            self._track_gates = [
+                TrackGate("SD1", Zone.SignDetectionZone, np.array([2.0, 4.0]), radius=radius),
+                TrackGate("SD2", Zone.SignDetectionZone, np.array([6.0, 2.2]), radius=radius),
+            ]
+
+        self._loop_closure_gate = None
+        self._lap_counter = 0
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer)
+        self._state_publisher = rospy.Publisher("/kal2/main_controller_state", MainControllerState, queue_size=10)
         self._marker_array_publisher = rospy.Publisher("/kal2/gates", MarkerArray, queue_size=10, latch=True)
 
         self._start_service = rospy.Service("start_driving", StartDriving, self._start_driving_handler)
@@ -111,6 +125,19 @@ class MainControllerNode(NodeBase):
     @property
     def current_zone(self) -> Optional[Zone]:
         return self.vehicle_state.current_zone
+    
+    def _publish_current_state(self):
+        msg = MainControllerState()
+
+        target_city = self.vehicle_state.target_city
+        current_zone = self.current_zone
+        msg.current_zone = current_zone.name if current_zone is not None else "None"
+        msg.target_city = target_city.name if target_city is not None else "None"
+        msg.is_driving_cv = bool(self.vehicle_state.is_driving_cw)
+        msg.is_initialized = self.vehicle_state.is_initialized
+        msg.lap_counter = self._lap_counter
+
+        self._state_publisher.publish(msg)
 
     def _publish_gate_markers(self):
         from std_msgs.msg import ColorRGBA, Header
@@ -168,15 +195,28 @@ class MainControllerNode(NodeBase):
 
                 break
 
+    def _detect_loop_closure(self, current_pose):
+        if self._loop_closure_gate is None:
+            return
+        
+        current_position = current_pose[:2, 3]
+        was_inside_gate = self._loop_closure_gate.inside_gate
+        is_inside_gate = self._loop_closure_gate.is_inside_gate(current_position)
+
+        if is_inside_gate and not was_inside_gate:
+            self._lap_counter += 1
+            rospy.loginfo(f"Loop closure detected: lap={self._lap_counter}")
+
     def _loop_callback(self, _):
         self._publish_gate_markers()
+        self._publish_current_state()
 
         try:
             transform = self._tf_buffer.lookup_transform(
                 source_frame="vehicle_rear_axle", target_frame="stargazer", time=rospy.Time(0)
             )
         except (LookupException, ConnectivityException, ExtrapolationException) as e:
-            rospy.logwarn(e)
+            rospy.logwarn_throttle(2, e)
             return
 
         current_pose = numpify(transform.transform)
@@ -190,6 +230,8 @@ class MainControllerNode(NodeBase):
                 estimate = self._initial_pose_estimator.get_estimate()
                 rospy.loginfo(f"Initial pose: {estimate}")
                 self._sm.initial_pose_detected(initial_pose=estimate)
+                self._loop_closure_gate = TrackGate("initial_position", Zone.InitialPosition, estimate[:2], radius=0.5)
+                self._loop_closure_gate._was_inside = True
 
         if self.current_state in [
             VehicleStateMachine.in_sign_detection_zone,
@@ -197,3 +239,4 @@ class MainControllerNode(NodeBase):
             VehicleStateMachine.in_recorded_zone,
         ]:
             self._detect_current_zone(current_pose)
+            self._detect_loop_closure(current_pose)

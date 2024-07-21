@@ -16,9 +16,10 @@ class TargetCity(Enum):
 
 
 class Zone(Enum):
-    RecordedZone = auto()
-    LaneDetectionZone = auto()
-    SignDetectionZone = auto()
+    RecordedZone = "RecordedZone"
+    LaneDetectionZone = "LaneDetectionZone"
+    SignDetectionZone = "SignDetectionZone"
+    InitialPosition = "InitialPosition"
 
 
 class StatesLogger:
@@ -35,6 +36,7 @@ class VehicleState:
         self._current_zone: Optional[Zone] = None
         self._initial_pose: Optional[np.ndarray] = None
         self._is_driving_cw: Optional[bool] = None
+        self._is_initialized = False
 
     @property
     def current_zone(self):
@@ -47,6 +49,10 @@ class VehicleState:
     @property
     def is_driving_cw(self):
         return self._is_driving_cw
+    
+    @property
+    def is_initialized(self):
+        return self._is_initialized
 
     def on_start_driving(self, target_city: TargetCity):
         if not isinstance(target_city, TargetCity):
@@ -63,6 +69,9 @@ class VehicleState:
         self._is_driving_cw = np.abs(initial_pose[2]) > np.pi / 2
 
         rospy.loginfo(f"Driving {'CW' if self._is_driving_cw else 'CCW'}.")
+
+    def on_exit_initializing(self):
+        self._is_initialized = True
 
     def on_enter_in_recorded_zone(self):
         rospy.loginfo("Entered recorded zone.")

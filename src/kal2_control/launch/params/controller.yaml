@@ -1,7 +1,7 @@
 controller:
 
-  speed: 0.5
-  rate: 15
+  speed: 0.75
+  rate: 30
 
 control_output_topic: "/anicar/mux/ackermann_cmd_mux/input/path_follow"
-path_topic: "/path"
+path_topic: "/kal2/trajectory"

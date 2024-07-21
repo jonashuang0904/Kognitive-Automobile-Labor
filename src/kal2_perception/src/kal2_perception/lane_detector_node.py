@@ -18,13 +18,13 @@ from tf2_ros import ExtrapolationException
 
 from kal2_perception.node_base import NodeBase
 from kal2_perception.birds_eye_view import PerspectiveBevTransformer, PointcloudBevTransformer, BevRoi
-# from kal2_perception.lane_tracking import LaneMap
 from kal2_perception.lane_tracking_v2 import LaneMap
 from kal2_perception.preprocessing import UnetPreprocessor
 from kal2_perception.feature_extraction import HoughFeatureExtractor, transform_features
 from kal2_perception.camera import CameraInfo
 from kal2_perception.visualization import LaneFeatureOverlay, ProjectedErrorsOverlay, LaneSegmentOverlay, LaneMapOverlay
 from kal2_perception.util import convert_images_to_arrays, create_point_cloud_msg
+from kal2_msgs.msg import MainControllerState
 
 from kal2_util.transforms import TransformProvider, CoordinateFrames
 
@@ -33,6 +33,9 @@ class LaneDetectorNode(NodeBase):
     def __init__(self) -> None:
         super().__init__(name="lane_detector_node")
         rospy.loginfo("Starting lane detector node...")
+
+        self._is_initialized = False
+        self._has_loop_closure = False
 
         self._rospack = rospkg.RosPack()
         self._transform_provider = TransformProvider()
@@ -47,10 +50,10 @@ class LaneDetectorNode(NodeBase):
         )
         self._feature_extractor = HoughFeatureExtractor()
 
-        tf_vehicle_to_world = self._transform_provider.named_transform("vehicle_to_world")
-        t = tf_camera_to_vehicle[:2, 3]
-        theta = np.arctan2(tf_camera_to_vehicle[1, 0], tf_camera_to_vehicle[0, 0])
-        self._lane_map = LaneMap(initial_pose=np.array((t[0], 0.5, np.pi)))
+        # tf_vehicle_to_world = self._transform_provider.named_transform("vehicle_to_world")
+        # t = tf_camera_to_vehicle[:2, 3]
+        # theta = np.arctan2(tf_camera_to_vehicle[1, 0], tf_camera_to_vehicle[0, 0])
+        self._lane_map = LaneMap()
 
         self._cv_bridge = CvBridge()
         self._debug_publisher_preprocessed = rospy.Publisher("/kal2/debug/preprocessed_image", Image, queue_size=10)
@@ -62,6 +65,7 @@ class LaneDetectorNode(NodeBase):
         self._center_line_publisher = rospy.Publisher("/kal2/center_line", NavPath, queue_size=10)
         self._trajectory_publisher = rospy.Publisher("/kal2/trajectory", NavPath, queue_size=10)
 
+        self._state_subscriber = rospy.Subscriber("/kal2/main_controller_state", MainControllerState, self._state_callback)
         self._color_image_subscriber = message_filters.Subscriber(self.params.color_image_topic, Image)
         self._depth_image_subscriber = message_filters.Subscriber(self.params.depth_image_topic, Image)
 
@@ -104,8 +108,29 @@ class LaneDetectorNode(NodeBase):
 
         publisher.publish(msg)
 
+    def _state_callback(self, msg: MainControllerState):
+        self._is_initialized = msg.is_initialized
+
+        if not self._has_loop_closure and msg.lap_counter > 0:
+            self._has_loop_closure = True
+            # TODO: smooth driven path
+
+
     @convert_images_to_arrays("bgr8", "16UC1")
     def _image_callback(self, color_image: np.ndarray, depth_image: np.ndarray, timestamp: rospy.Time) -> None:
+        if not self._is_initialized:
+            rospy.loginfo_throttle(2, "Waiting for initialization...")
+            return
+        
+        if self._has_loop_closure:
+            rospy.loginfo_once("Loop closure: Publishing previous path.")
+            try:
+                self._publish_path(np.vstack(self._lane_map._center_line).T, self._trajectory_publisher)
+            except ValueError as e:
+                rospy.logerr(e)
+            return
+
+
         now = rospy.Time.now()
         t0 = time.time()
         # 1. Preprocessing: Convert color image into a binary mask
@@ -130,7 +155,6 @@ class LaneDetectorNode(NodeBase):
         t1 = time.time()
 
         # 4. Track lanes
-        # TODO: Implement lane tracking
         center_points = self._lane_map.update(transformed_features, vehicle_pose=tf_vehicle_to_world)
         t2 = time.time()
 

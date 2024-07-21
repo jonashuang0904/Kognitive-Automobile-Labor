@@ -145,7 +145,7 @@ class LeastSquaresLaneFinder:
         return np.mean(coeffs, axis=0)
 
 class LaneMap:
-    def __init__(self, initial_pose, lane_width: float = 0.9, look_ahead_distance: float = 3.0):
+    def __init__(self, lane_width: float = 0.9, look_ahead_distance: float = 3.0):
         self._lane_width: float = lane_width
         self._look_ahead_distance: float = look_ahead_distance
         self._observations: List[Observation] = []
