@@ -268,7 +268,7 @@ class LocalizationNode(NodeBase):
                 rospy.logwarn(f"Detected outlier with distance {dist}.")
                 self._outlier_count += 1
                 return
-            elif self._outlier_count > 10:
+            elif self._outlier_count > self.params.max_outliers:
                 rospy.logwarn(f"Found more than {self._outlier_count} outliers. Resetting..")
                 self.reset()
             

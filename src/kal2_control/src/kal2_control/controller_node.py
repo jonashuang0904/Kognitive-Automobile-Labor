@@ -16,11 +16,16 @@ from geometry_msgs.msg import TransformStamped, PoseStamped, Point, Quaternion
 from kal2_control.pure_pursuit import PurePursuitController
 from kal2_control.stanley_controller import StanleyController
 from kal2_control.state_machine import Zone, TurningDirection
-from kal2_control.trajectory_planning import create_trajectory_from_path
+from kal2_control.trajectory_planning import (
+    create_trajectory_from_path,
+    create_trajectory_from_path_with_control_points,
+)
+from kal2_control.turning import calculate_turningpath
 from kal2_util.node_base import NodeBase
-from kal2_msgs.msg import MainControllerState # type: ignore
+from kal2_msgs.msg import MainControllerState  # type: ignore
 
 # roslaunch command for own recorded path: roslaunch kal demo_path_follower.launch path_file:=/home/kal2/path_wholeloop_ic_smooved.yaml
+
 
 @dataclass
 class Pose2D:
@@ -31,13 +36,12 @@ class Pose2D:
     @property
     def position(self):
         return np.array([self.x, self.y])
-    
+
     @property
     def rotation_matrix(self):
         cos_theta = np.cos(self.yaw)
         sin_theta = np.sin(self.yaw)
-        return np.array([[cos_theta, sin_theta],
-                         [sin_theta, -cos_theta]])
+        return np.array([[cos_theta, sin_theta], [sin_theta, -cos_theta]])
 
     @staticmethod
     def from_pose_msg(msg: TransformStamped):
@@ -61,39 +65,39 @@ class CarState:
 
         return msg
 
+
 def _extract_xyz_from_pose(pose: PoseStamped):
-            return pose.pose.position.x, pose.pose.position.y, pose.pose.position.z
+    return pose.pose.position.x, pose.pose.position.y, pose.pose.position.z
+
 
 def _load_recorded_path(file_path: str) -> NavMsgPath:
     with Path(file_path).open() as file:
         path_dict = yaml.safe_load(file)
 
     path_msg = NavMsgPath()
-    path_msg.header.seq = path_dict['header']['seq']
-    path_msg.header.stamp.secs = path_dict['header']['stamp']['secs']
-    path_msg.header.stamp.nsecs = path_dict['header']['stamp']['nsecs']
-    path_msg.header.frame_id = path_dict['header']['frame_id']
+    path_msg.header.seq = path_dict["header"]["seq"]
+    path_msg.header.stamp.secs = path_dict["header"]["stamp"]["secs"]
+    path_msg.header.stamp.nsecs = path_dict["header"]["stamp"]["nsecs"]
+    path_msg.header.frame_id = path_dict["header"]["frame_id"]
 
-    for pose_dict in path_dict['poses']:
+    for pose_dict in path_dict["poses"]:
         pose_stamped = PoseStamped()
-        pose_stamped.header.seq = pose_dict['header']['seq']
-        pose_stamped.header.stamp.secs = pose_dict['header']['stamp']['secs']
-        pose_stamped.header.stamp.nsecs = pose_dict['header']['stamp']['nsecs']
-        pose_stamped.header.frame_id = pose_dict['header']['frame_id']
-        
+        pose_stamped.header.seq = pose_dict["header"]["seq"]
+        pose_stamped.header.stamp.secs = pose_dict["header"]["stamp"]["secs"]
+        pose_stamped.header.stamp.nsecs = pose_dict["header"]["stamp"]["nsecs"]
+        pose_stamped.header.frame_id = pose_dict["header"]["frame_id"]
+
         pose_stamped.pose.position = Point(
-            pose_dict['pose']['position']['x'],
-            pose_dict['pose']['position']['y'],
-            pose_dict['pose']['position']['z']
+            pose_dict["pose"]["position"]["x"], pose_dict["pose"]["position"]["y"], pose_dict["pose"]["position"]["z"]
         )
-        
+
         pose_stamped.pose.orientation = Quaternion(
-            pose_dict['pose']['orientation']['x'],
-            pose_dict['pose']['orientation']['y'],
-            pose_dict['pose']['orientation']['z'],
-            pose_dict['pose']['orientation']['w']
+            pose_dict["pose"]["orientation"]["x"],
+            pose_dict["pose"]["orientation"]["y"],
+            pose_dict["pose"]["orientation"]["z"],
+            pose_dict["pose"]["orientation"]["w"],
         )
-        
+
         path_msg.poses.append(pose_stamped)
 
     return path_msg
@@ -105,8 +109,13 @@ class ControllerNode(NodeBase):
         rospy.loginfo("Starting controller node...")
 
         controller_params = self.params.controller
-       
-        self._purePursuit = StanleyController()
+
+        self._purePursuit = StanleyController(
+            target_speed=self.params.target_speed,
+            k=self.params.stanley_k,
+            look_ahead_index=self.params.look_ahead_index,
+            adaptive_speed=self.params.use_adaptive_speed,
+        )
 
         self._recorded_path = _load_recorded_path(self.params.recorded_path)
         self._recorded_lane = None
@@ -119,8 +128,6 @@ class ControllerNode(NodeBase):
         self._turning_direction = TurningDirection.Unknown
         self._current_zone = Zone.RecordedZone
 
-        # self._car_state = CarState(steering_angle=0, speed=controller_params['speed'])
-
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer)
 
@@ -129,30 +136,74 @@ class ControllerNode(NodeBase):
             self.params.control_output_topic, AckermannDriveStamped, queue_size=10
         )
         self._path_subscriber = rospy.Subscriber(self.params.path_topic, NavMsgPath, self._path_callback)
-        self._state_subscriber = rospy.Subscriber("/kal2/main_controller_state", MainControllerState, self._state_callback)
-        
-        self.period = rospy.Duration.from_sec(1 / controller_params['rate'])
+        self._state_subscriber = rospy.Subscriber(
+            "/kal2/main_controller_state", MainControllerState, self._state_callback
+        )
+
+        self.period = rospy.Duration.from_sec(1 / controller_params["rate"])
         self._control_timer = rospy.Timer(self.period, self._control_callback)
 
     @cached_property
     def recorded_path(self):
         if not self._is_initialized:
             raise ValueError("Recorded path is only valid once initialized.")
-        
-        offset = -0.2 if self._is_driving_cw else 0.2
-        self._recorded_lane = create_trajectory_from_path(self._recorded_path, offset)
-        
+
+        map_offset = np.array([self.params.map_offset_x, self.params.map_offset_y]).reshape(2, 1)
+        offset = -self.params.lane_offset if self._is_driving_cw else self.params.lane_offset
+
+        if not self.params.use_control_points:
+            self._recorded_lane = create_trajectory_from_path(
+                path=self._recorded_path,
+                lane_offset=offset,
+                map_offset=map_offset,
+                n_samples=self.params.map_samples,
+                v_min=self.params.map_vmin,
+                v_max=self.params.map_vmax,
+            )
+        else:
+            n_points = (int(self.params.n_points),)
+            n_gap = (int(self.params.n_gap),)
+            ct1 = (np.array([self.params.ct1_x, self.params.ct1_y]),)
+            ct2 = (np.array([self.params.ct2_x, self.params.ct2_y]),)
+            ct3 = np.array([self.params.ct3_x, self.params.ct3_y])
+
+            try:
+                self._recorded_lane = create_trajectory_from_path_with_control_points(
+                    path=self._recorded_path,
+                    lane_offset=offset,
+                    map_offset=map_offset,
+                    n_samples=self.params.map_samples,
+                    v_min=self.params.map_vmin,
+                    v_max=self.params.map_vmax,
+                    n_points=n_points,
+                    n_gap=n_gap,
+                    ct1=ct1,
+                    ct2=ct2,
+                    ct3=ct3,
+                )
+            except (ValueError, IndexError) as e:
+                rospy.logerr(e)
+                self._recorded_lane = create_trajectory_from_path(
+                    path=self._recorded_path,
+                    lane_offset=offset,
+                    map_offset=map_offset,
+                    n_samples=self.params.map_samples,
+                    v_min=self.params.map_vmin,
+                    v_max=self.params.map_vmax,
+                )
+
         path = np.array([_extract_xyz_from_pose(pose) for pose in self._recorded_lane.poses])
+        path = path[::-1] if self.params.invert_path else path
+
         return path[::-1] if self._is_driving_cw else path[::1]
-            
 
     def _get_current_pose(self, timeout: rospy.Duration = rospy.Duration(1.0)) -> Pose2D:
         transform = self._tf_buffer.lookup_transform(
-            target_frame="stargazer", source_frame="base_link", time=rospy.Time(0), timeout=timeout
+            target_frame="stargazer", source_frame=self.params.vehicle_frame, time=rospy.Time(0), timeout=timeout
         )
 
         return Pose2D.from_pose_msg(transform)
-    
+
     def _state_callback(self, msg: MainControllerState):
         try:
             zone = Zone(msg.current_zone)
@@ -168,7 +219,7 @@ class ControllerNode(NodeBase):
 
     def _path_callback(self, msg: NavMsgPath):
         self._path_points = [_extract_xyz_from_pose(pose) for pose in msg.poses]
-        
+
     def _publish_control_output(self, steering_angle: float, speed: float) -> None:
         if np.isnan(steering_angle) or np.isnan(speed):
             rospy.logerr(f"Speed or steering angle is nan: steering_angle={steering_angle}, speed={speed}")
@@ -177,7 +228,6 @@ class ControllerNode(NodeBase):
         msg = AckermannDriveStamped()
         msg.header = Header(frame_id="vehicle_rear_axle", stamp=rospy.Time.now())
         msg.drive = CarState(steering_angle, speed).as_ackermann_msg()
-        # msg.drive = self._car_state.as_ackermann_msg()
         self._control_output_publisher.publish(msg)
 
     def _control_callback(self, _):
@@ -198,20 +248,22 @@ class ControllerNode(NodeBase):
         except (LookupException, ExtrapolationException) as e:
             rospy.logwarn_throttle(5, e)
             return
-        
+
         if self._turning_direction != TurningDirection.Unknown:
-            steering_angle = 10 if self._turning_direction == TurningDirection.Left else -10
-            rospy.loginfo(f"Turning: {steering_angle:.02f}")
-            self._publish_control_output(steering_angle=np.radians(steering_angle), speed=0.5)
+            path = calculate_turningpath(self._turning_direction, self._is_driving_cw)
+            steering_angle, speed = self._purePursuit.update(
+                current_pose.rotation_matrix, current_pose.position, path
+            )
+            self._publish_control_output(steering_angle=steering_angle, speed=self.params.turning_speed)
             return
 
         if not self._use_recorded_path:
             rospy.loginfo_throttle(1, "Using perception.")
-        
+
         path = self.recorded_path[:, :3] if self._use_recorded_path else np.array(self._path_points)[:2]
         steering_angle, speed = self._purePursuit.update(current_pose.rotation_matrix, current_pose.position, path.T)
-        
+
         if self._current_zone == Zone.SignDetectionZone:
-            speed = 0.25
-        
+            speed = self.params.sign_detection_speed
+
         self._publish_control_output(steering_angle, speed)
