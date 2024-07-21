@@ -10,6 +10,22 @@ target_speed: 1.0
 look_ahead_index: 2
 use_adaptive_speed: false
 
+map_offset_x: 0.08
+map_offset_y: -0.15
+map_samples: 600
+map_vmin: 1.0
+map_vmax: 2.0
+
+use_control_points: false
+n_points: 150
+n_gap: 30
+ct1_x: 1.8
+ct1_y: 0.6
+ct2_x: 2.5
+ct2_y: 1.0
+ct3_x: 2.5
+ct3_y: 1.0
+
 lane_offset: 0.2
 invert_path: false
 vehicle_frame: "base_link"

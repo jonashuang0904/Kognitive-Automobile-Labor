@@ -16,7 +16,10 @@ from geometry_msgs.msg import TransformStamped, PoseStamped, Point, Quaternion
 from kal2_control.pure_pursuit import PurePursuitController
 from kal2_control.stanley_controller import StanleyController
 from kal2_control.state_machine import Zone, TurningDirection
-from kal2_control.trajectory_planning import create_trajectory_from_path
+from kal2_control.trajectory_planning import (
+    create_trajectory_from_path,
+    create_trajectory_from_path_with_control_points,
+)
 from kal2_control.turning import calculate_turningpath
 from kal2_util.node_base import NodeBase
 from kal2_msgs.msg import MainControllerState  # type: ignore
@@ -145,8 +148,49 @@ class ControllerNode(NodeBase):
         if not self._is_initialized:
             raise ValueError("Recorded path is only valid once initialized.")
 
+        map_offset = np.array([self.params.map_offset_x, self.params.map_offset_y]).reshape(2, 1)
         offset = -self.params.lane_offset if self._is_driving_cw else self.params.lane_offset
-        self._recorded_lane = create_trajectory_from_path(self._recorded_path, offset)
+
+        if not self.params.use_control_points:
+            self._recorded_lane = create_trajectory_from_path(
+                path=self._recorded_path,
+                lane_offset=offset,
+                map_offset=map_offset,
+                n_samples=self.params.map_samples,
+                v_min=self.params.map_vmin,
+                v_max=self.params.map_vmax,
+            )
+        else:
+            n_points = (int(self.params.n_points),)
+            n_gap = (int(self.params.n_gap),)
+            ct1 = (np.array([self.params.ct1_x, self.params.ct1_y]),)
+            ct2 = (np.array([self.params.ct2_x, self.params.ct2_y]),)
+            ct3 = np.array([self.params.ct3_x, self.params.ct3_y])
+
+            try:
+                self._recorded_lane = create_trajectory_from_path_with_control_points(
+                    path=self._recorded_path,
+                    lane_offset=offset,
+                    map_offset=map_offset,
+                    n_samples=self.params.map_samples,
+                    v_min=self.params.map_vmin,
+                    v_max=self.params.map_vmax,
+                    n_points=n_points,
+                    n_gap=n_gap,
+                    ct1=ct1,
+                    ct2=ct2,
+                    ct3=ct3,
+                )
+            except (ValueError, IndexError) as e:
+                rospy.logerr(e)
+                self._recorded_lane = create_trajectory_from_path(
+                    path=self._recorded_path,
+                    lane_offset=offset,
+                    map_offset=map_offset,
+                    n_samples=self.params.map_samples,
+                    v_min=self.params.map_vmin,
+                    v_max=self.params.map_vmax,
+                )
 
         path = np.array([_extract_xyz_from_pose(pose) for pose in self._recorded_lane.poses])
         path = path[::-1] if self.params.invert_path else path
