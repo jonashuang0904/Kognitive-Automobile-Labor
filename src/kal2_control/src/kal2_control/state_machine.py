@@ -14,6 +14,11 @@ class TargetCity(Enum):
     Köln = "Köln"
     München = "München"
 
+class TurningDirection(Enum):
+    Unknown = "unknown"
+    Left = "left"
+    Right = "right"
+
 
 class Zone(Enum):
     RecordedZone = "RecordedZone"
@@ -37,6 +42,7 @@ class VehicleState:
         self._initial_pose: Optional[np.ndarray] = None
         self._is_driving_cw: Optional[bool] = None
         self._is_initialized = False
+        self._turning_direction: TurningDirection = TurningDirection.Unknown
 
     @property
     def current_zone(self):
@@ -53,6 +59,10 @@ class VehicleState:
     @property
     def is_initialized(self):
         return self._is_initialized
+    
+    @property
+    def turning_direction(self):
+        return self._turning_direction
 
     def on_start_driving(self, target_city: TargetCity):
         if not isinstance(target_city, TargetCity):
@@ -69,6 +79,10 @@ class VehicleState:
         self._is_driving_cw = np.abs(initial_pose[2]) > np.pi / 2
 
         rospy.loginfo(f"Driving {'CW' if self._is_driving_cw else 'CCW'}.")
+
+    def on_sign_detected(self, target_city: TargetCity, turning_direction: TurningDirection):
+        rospy.loginfo(f"Detected {target_city.value} on the {turning_direction.value} side.")
+        self._turning_direction = turning_direction
 
     def on_exit_initializing(self):
         self._is_initialized = True

@@ -1,0 +1,2 @@
+string city
+string direction

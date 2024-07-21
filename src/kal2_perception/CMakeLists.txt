@@ -6,6 +6,13 @@ project(kal2_perception)
 ###################
 ## Find packages ##
 ###################
+find_package(catkin REQUIRED COMPONENTS
+  rospy
+  sensor_msgs
+  std_msgs
+  cv_bridge
+  tf2_ros
+)
 find_package(mrt_cmake_modules REQUIRED)
 include(UseMrtStdCompilerFlags)
 include(GatherDeps)
@@ -13,6 +20,8 @@ include(GatherDeps)
 find_package(AutoDeps REQUIRED COMPONENTS ${DEPENDEND_PACKAGES})
 
 mrt_parse_package_xml()
+
+catkin_package()
 
 ########################
 ## Add python modules ##
@@ -41,6 +50,10 @@ endif()
 # Install all targets, headers by default and scripts and other files if specified (folders or files).
 # This command also exports libraries and config files for dependent packages and this supersedes catkin_package.
 mrt_install(PROGRAMS scripts FILES res data ${PROJECT_INSTALL_FILES})
+
+# Install the Python scripts
+catkin_install_python(PROGRAMS src/kal2_perception/city_detector_node.py
+                      DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 #############
 ## Testing ##

@@ -1,10 +1,10 @@
-#!/usr/bin/env python3
+#! /usr/bin/env python3
 
 import rospy
 from contextlib import suppress
-from kal2_perception.sign_detector_node import SignDetectorNode
+from kal2_perception.city_detector_node import CityDetectorNode
 
 if __name__ == "__main__":
     with suppress(rospy.ROSInterruptException):
-        node = SignDetectorNode()
+        node = CityDetectorNode()
         rospy.spin()
