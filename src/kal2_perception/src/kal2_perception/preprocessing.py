@@ -109,7 +109,7 @@ class UnetPreprocessor(ImagePreprocessor):
         if runtime == "onnx":
             self._inference_session = OnnxInferenceSession(model_path=model_path, input_shape=input_shape)
         elif runtime == "openvino":
-            self._inference_session = OpenVinoInferenceSession(model_path=model_path, input_shape=input_shape, device='GPU')
+            self._inference_session = OpenVinoInferenceSession(model_path=model_path, input_shape=input_shape, device='CPU')
         else:
             raise ValueError(f"Invalid runtime: {runtime}")
 

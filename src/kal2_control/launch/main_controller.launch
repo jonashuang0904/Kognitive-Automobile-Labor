@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+    <node name="main_controller_node" ns="kal2" pkg="kal2_control" type="main_controller_node" output="screen">
+        <env name="ROSCONSOLE_FORMAT" value="[${severity}] [${time}] [${node}]: ${message}"/>
+        <rosparam file="$(find kal2_control)/launch/params/main_controller.yaml" command="load" />
+    </node>
+</launch>

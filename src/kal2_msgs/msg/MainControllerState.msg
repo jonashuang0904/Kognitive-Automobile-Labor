@@ -1,0 +1,5 @@
+string target_city
+string current_zone
+bool is_driving_cv
+bool is_initialized
+int32 lap_counter
