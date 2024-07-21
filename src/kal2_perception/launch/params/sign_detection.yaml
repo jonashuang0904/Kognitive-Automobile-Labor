@@ -1,0 +1,8 @@
+use_tesseract: false
+tessaract_binary_treshold: 100
+detect_always: false
+prediction_queue_size: 10
+
+min_area: 4000
+hsv_lower: [15, 100, 100]
+hsv_upper: [50, 255, 255]

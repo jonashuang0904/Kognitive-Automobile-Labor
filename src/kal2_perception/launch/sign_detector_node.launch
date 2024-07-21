@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <launch>
     <!--<param name="/use_sim_time" value="true" /> -->
-    <node name="sign_detector_node" ns="kal2" pkg="kal2_perception" type="sign_detector_node.py" output="screen">
+    <node name="sign_detector_node" ns="kal2" pkg="kal2_perception" type="sign_detector_node" output="screen">
         <param name="model_path" value="$(find kal2_perception)/models/mobilenetv2_sign_detection_final.onnx" />
+        <param name="ocr_model_path" value="$(find kal2_perception)/models/crnn_kurapan_keras_ocr_pred.onnx" />
+        <param name="craft_model_path" value="$(find kal2_perception)/models/craft_keras_ocr.onnx" />
+
         <env name="ROSCONSOLE_FORMAT" value="[${severity}] [${time}] [${node}]: ${message}"/>
-        <rosparam file="$(find kal2_perception)/launch/params/default.yaml" command="load" />
+        <rosparam file="$(find kal2_perception)/launch/params/sign_detection.yaml" command="load" />
     </node>
 </launch>

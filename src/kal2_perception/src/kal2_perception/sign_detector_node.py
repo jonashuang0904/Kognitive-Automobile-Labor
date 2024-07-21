@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
-
-from collections import Counter
+from collections import Counter, deque
+from pathlib import Path
 
 import cv2 as cv
 import numpy as np
@@ -14,177 +13,203 @@ from cv_bridge import CvBridge
 
 import pytesseract
 
+from kal2_perception.preprocessing import OpenVinoInferenceSession, OnnxInferenceSession
+from kal2_perception.ocr import TesseractCityDetector, CRNNCityDetector, crop_to_bbox
+from kal2_control.state_machine import TurningDirection, Zone
+from kal2_util.node_base import NodeBase
+
 from kal2_msgs.msg import DetectedSign
+from kal2_msgs.msg import MainControllerState # type: ignore
 
 
-class SignDetectorNode:
+
+def apply_hsv_threshold(
+    image: np.ndarray,
+    min_area: int = 4000,
+    lower: np.ndarray = np.array([15, 100, 100]),
+    upper: np.ndarray = np.array([50, 255, 255]),
+):
+    hsv = cv.cvtColor(image, cv.COLOR_BGR2HSV)
+    hsv[:100] = (0, 0, 0)  # ignore upper most part of the image
+
+    mask = cv.inRange(hsv, lower, upper)
+    mask = binary_fill_holes(mask).astype(np.uint8) * 255
+    contours, _ = cv.findContours(mask, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
+
+    region_proposals = []
+    areas = []
+    for cnt in contours:
+        area = cv.contourArea(cnt)
+        if area > min_area:
+            rect = cv.minAreaRect(cnt)
+            region_proposals.append(rect)
+            areas.append(area)
+    return region_proposals, areas
+
+
+def increase_sharpness(image):
+    kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+    return cv.filter2D(image, -1, kernel)
+
+
+def increase_contrast(image):
+    lab = cv.cvtColor(image, cv.COLOR_BGR2LAB)
+    l, a, b = cv.split(lab)
+    clahe = cv.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    cl = clahe.apply(l)
+    limg = cv.merge((cl, a, b))
+    return cv.cvtColor(limg, cv.COLOR_LAB2BGR)
+
+
+class SignDetectorNode(NodeBase):
     def __init__(self):
-        rospy.init_node("sign_detector_node", anonymous=True)
+        super().__init__(name="sign_detector_node")
         rospy.loginfo("Starting sign detector node...")
 
         self.bridge = CvBridge()
-        self.core = Core()
-        self.model_path = rospy.get_param("~model_path")
-        self.compiled_model, self.input_layer = self.load_model(self.model_path)
-        self.predictions = []
-        self.detected_city = "unknown"
 
-        self.image_sub = rospy.Subscriber("/camera_front/color/image_raw", Image, self._image_callback)
+        self._inference_session = OpenVinoInferenceSession(
+            model_path=Path(self.params.model_path), input_shape=(1, 224, 224, 3)
+        )
+
+        if self.params.use_tesseract:
+            rospy.loginfo("Using tesseract.")
+            self._city_detector = TesseractCityDetector(threshold=self.params.tessaract_binary_treshold)
+        else:
+            rospy.loginfo("Using CRNN + CRAFT.")
+            self._city_detector = CRNNCityDetector(self.params.ocr_model_path, self.params.craft_model_path)
+
+        self._predictions = deque(maxlen=self.params.prediction_queue_size)
+        self._current_zone = Zone.RecordedZone
+
+        self._hsv_lower = np.array(self.params.hsv_lower)
+        self._hsv_upper = np.array(self.params.hsv_upper)
+        self._min_area = self.params.min_area
+
         self._result_publisher = rospy.Publisher("/kal2/detected_sign", DetectedSign, queue_size=10)
         self._debug_publisher = rospy.Publisher("/kal2/debug/signs", Image, queue_size=10)
+        self._debug_ocr_publisher = rospy.Publisher("/kal2/debug/signs_ocr", Image, queue_size=10)
+        self._image_subscriber = rospy.Subscriber(
+            "/camera_front/color/image_raw", Image, self._image_callback, queue_size=1
+        )
+        self._state_subscriber = rospy.Subscriber("/kal2/main_controller_state", MainControllerState, self._state_callback)
+
+
+        rospy.loginfo("Sign detector node started.")
 
     def _image_callback(self, color_image_msg: Image) -> None:
+        if self._current_zone != Zone.SignDetectionZone and not self.params.detect_always:
+            return
+
         color_image = self.bridge.imgmsg_to_cv2(color_image_msg, desired_encoding="bgr8")
-        detected_sign = self.process_image(color_image)
-        if detected_sign and detected_sign != "unknown":
-            self.publish_result(detected_sign)
+        city, direction = self.process_image(color_image)
 
-    def load_model(self, model_path):
-        model = self.core.read_model(model_path)
-        compiled_model = self.core.compile_model(model, device_name="CPU")
-        input_layer = compiled_model.input(0)
-        return compiled_model, input_layer
+        if city != "unknown":
+            rospy.loginfo(f"Saw {city, direction.value}")
+            self._predictions.append((city, direction))
 
-    def apply_hsv_threshold(self, image):
-        hsv = cv.cvtColor(image, cv.COLOR_BGR2HSV)
-        hsv[:100] = (0, 0, 0)
-        lower = np.array([15, 100, 100])
-        upper = np.array([50, 255, 255])
-        mask = cv.inRange(hsv, lower, upper)
-        mask = binary_fill_holes(mask).astype(np.uint8) * 255
-        result = cv.bitwise_and(image, image, mask=mask)
-        contours, _ = cv.findContours(mask, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-        region_proposals = []
-        for cnt in contours:
-            area = cv.contourArea(cnt)
-            if area > 4000:
-                rect = cv.minAreaRect(cnt)
-                box = cv.boxPoints(rect)
-                cv.drawContours(result, [box.astype(int)], 0, (0, 0, 255), thickness=5)
-                region_proposals.append(rect)
-        return result, region_proposals
+        if len(self._predictions) == 0:
+            return
 
-    def crop_to_bbox(self, image, rect, scale_factor=1.0):
-        box = cv.boxPoints(rect).astype(np.float32)
-        center = np.mean(box, axis=0)
-        scaled_box = np.array([center + (point - center) * scale_factor for point in box], dtype=np.float32)
-        sorted_indices = np.argsort(scaled_box[:, 1])
-        lowest_idx = sorted_indices[0]
-        second_lowest_idx = sorted_indices[1]
-        a = scaled_box[lowest_idx]
-        b = scaled_box[second_lowest_idx]
-        ab = b - a
-        angle_to_x_positive = np.arctan2(ab[1], ab[0])
-        angle_to_x_negative = np.arctan2(ab[1], ab[0]) - np.pi if ab[1] != 0 else np.pi
-        angle = angle_to_x_positive if abs(angle_to_x_positive) < abs(angle_to_x_negative) else angle_to_x_negative
-        M = cv.getRotationMatrix2D(tuple(a), np.degrees(angle), 1.0)
-        cos = np.abs(M[0, 0])
-        sin = np.abs(M[0, 1])
-        new_width = int(image.shape[1] * cos + image.shape[0] * sin)
-        new_height = int(image.shape[1] * sin + image.shape[0] * cos)
-        M[0, 2] += (new_width / 2) - a[0]
-        M[1, 2] += (new_height / 2) - a[1]
-        rotated = cv.warpAffine(image, M, (new_width, new_height))
-        box = (cv.transform(np.array([box]), M)).astype(np.int64)[0]
-        x, y, w, h = cv.boundingRect(box)
-        cropped = rotated[y : y + h, x : x + w]
-        return cropped
+        (predicted_city, predicted_direction), count = Counter(self._predictions).most_common(1)[0]
 
-    def increase_sharpness(self, image):
-        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
-        return cv.filter2D(image, -1, kernel)
+        if count >= 2:
+            self._publish_result(predicted_city, predicted_direction)
 
-    def increase_contrast(self, image):
-        lab = cv.cvtColor(image, cv.COLOR_BGR2LAB)
-        l, a, b = cv.split(lab)
-        clahe = cv.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        cl = clahe.apply(l)
-        limg = cv.merge((cl, a, b))
-        return cv.cvtColor(limg, cv.COLOR_LAB2BGR)
+        rospy.loginfo(f"Most common prediction: {predicted_city}, {predicted_direction.value}")
 
-    def binarize_image(self, image):
-        gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-        _, binary = cv.threshold(gray, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
-        return binary
+    def _state_callback(self, msg: MainControllerState):
+        try:
+            zone = Zone(msg.current_zone)
+        except ValueError as e:
+            self._is_initialized = False
+            return
 
-    def perform_ocr(self, image):
-        return pytesseract.image_to_string(image)
+        self._current_zone = zone
+
+
+    def _publish_debug_image(self, image, boxes, largest_box):
+        debug_image = image.copy()
+        for box in boxes:
+            box = cv.boxPoints(box)
+            cv.drawContours(debug_image, [box.astype(int)], contourIdx=0, color=(0, 0, 255), thickness=5)
+
+        box = cv.boxPoints(largest_box)
+        cv.drawContours(debug_image, [box.astype(int)], contourIdx=0, color=(0, 255, 0), thickness=5)
+
+        debug_image = self.bridge.cv2_to_imgmsg(debug_image)
+        self._debug_publisher.publish(debug_image)
+        #self._predictions.clear()
+
+    def _publish_result(self, predicted_city, predicted_direction):
+        result_msg = DetectedSign(city=predicted_city, direction=predicted_direction.value)
+        self._result_publisher.publish(result_msg)
 
     def run_inference(self, image):
         input_image = cv.resize(image, (224, 224))
         input_image = input_image.astype(np.float32) / 255.0
         input_image = np.expand_dims(input_image, axis=0)
-        result = self.compiled_model([input_image])[self.compiled_model.output(0)]
+        result = self._inference_session.run(input_image)
         return result
 
     def process_image(self, image):
-        hsv_result, boxes = self.apply_hsv_threshold(image)
+        boxes, areas = apply_hsv_threshold(image, self._min_area, self._hsv_lower, self._hsv_upper)
         if len(boxes) == 0:
-            rospy.loginfo("No valid regions found in the image.")
-            return "unknown"
-        
-        debug_image = image.copy()
-        for box in boxes:
-            box = cv.boxPoints(box)
-            cv.drawContours(debug_image, [box.astype(int)], contourIdx=0, color=(0, 0, 255), thickness=5)
-        debug_image = self.bridge.cv2_to_imgmsg(debug_image)
-        self._debug_publisher.publish(debug_image)
+            return "unknown", TurningDirection.Unknown
 
+        indices = np.argsort(areas)[::-1]
+        largest_box = boxes[indices[0]]
 
-        self.detected_city = self.detect_city(image, boxes[0])
-        if self.detected_city and self.detected_city != "unknown":
-            rospy.loginfo(f"Detected city: {self.detected_city}")
+        self._publish_debug_image(image, boxes, largest_box)
 
-        cropped_image = self.crop_to_bbox(image, boxes[0], scale_factor=1.5)
+        detected_city = self.detect_city(image, largest_box)
+        if detected_city and detected_city != "unknown":
+            rospy.loginfo(f"Detected city: {detected_city}")
+
+        cropped_image = crop_to_bbox(image, largest_box, scale_factor=1.5)
         if cropped_image is None or cropped_image.size == 0:
             rospy.loginfo("Empty cropped image.")
-            return "unknown"
+            return "unknown", TurningDirection.Unknown
 
         inference_result = self.run_inference(cropped_image)
         predicted_class = np.argmax(inference_result)
 
-        if self.detected_city != "unknown":
-            self.predictions.append(predicted_class)
-        #rospy.loginfo(f"inference: {inference_result}")
-        #rospy.loginfo(f"Predicted class: {predicted_class}")
-        if predicted_class == 0:
-            return "left"
-        elif predicted_class == 1:
-            return "right"
-        else:
-            return "unknown"
+        return detected_city, TurningDirection.Left if predicted_class == 0 else TurningDirection.Right
 
     def detect_city(self, image, rect):
-        cropped_image = self.crop_to_bbox(image, rect, scale_factor=1.0)
-        contrast_image = self.increase_contrast(cropped_image)
-        sharp_image = self.increase_sharpness(contrast_image)
-        binary_image = self.binarize_image(sharp_image)
-        text = self.perform_ocr(binary_image)
+        try:
+            text, cropped_image = self._city_detector.detect(image=image, box=rect)
+        except (RuntimeError, ValueError) as e:
+            rospy.logerr(e)
+            return "unknown"
+
+        debug_image = self.bridge.cv2_to_imgmsg(cropped_image)
+        self._debug_ocr_publisher.publish(debug_image)
+
         city_names = ["Munchen", "Karlsruhe", "Koln", "Hildesheim"]
-        for city in city_names:
-            if any(city[i : i + 3].lower() in text.lower() for i in range(len(city) - 2)):
-                return city
-        return "unknown"
 
-    def publish_result(self, detected_sign):
-        if len(self.predictions) == 0:
-            rospy.loginfo("No predictions made.")
-            return
+        def count_common_letters(ref: str, other: str) -> int:
+            return len(set(ref.lower()).intersection(set(other.lower())))
 
-        most_common_prediction = Counter(self.predictions).most_common(1)[0][0]
-        direction = "left" if most_common_prediction == 0 else "right"
-        result_msg = DetectedSign(city=self.detected_city, direction=direction)
+        common_letter_count = [count_common_letters(city, text) for city in city_names]
+        indices = np.argsort(common_letter_count)[::-1]
 
-        self._result_publisher.publish(result_msg)
-        rospy.loginfo(f"Most common predicted direction: {direction}")
-        self.predictions = []
-
-    def run(self):
-        rate = rospy.Rate(1)
-        while not rospy.is_shutdown():
-            rate.sleep()
-
-
-if __name__ == "__main__":
-    node = SignDetectorNode()
-    node.run()
+        if common_letter_count[indices[0]] == common_letter_count[indices[1]]:
+            if common_letter_count[indices[0]] == 0:
+                return "unknown"
+        
+            best_match = None
+            lowest_diff = 1000
+            for city in city_names:
+                diff = len(city) - len(text)
+                if diff < lowest_diff:
+                    best_match = city
+                    lowest_diff = diff
+            if lowest_diff != 1000:
+                return best_match
+            
+            return "unknown"
+        else:
+            if city_names[indices[0]] == city_names[-1] and len(text) < 5:
+                return city_names[2]
+            return city_names[indices[0]]
