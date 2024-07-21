@@ -1,2 +1,2 @@
-gate_radius: 0.5
+gate_radius: 1.0
 use_lane_detection: false

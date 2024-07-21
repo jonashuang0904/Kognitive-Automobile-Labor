@@ -2,8 +2,8 @@ controller:
   speed: 0.75
   rate: 30
 
-turning_speed: 0.25
-sign_detection_speed: 0.25
+turning_speed: 0.1
+sign_detection_speed: 0.1
 
 stanley_k: 0.5
 target_speed: 1.0

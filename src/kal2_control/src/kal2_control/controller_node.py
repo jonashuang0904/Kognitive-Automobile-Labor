@@ -252,7 +252,7 @@ class ControllerNode(NodeBase):
         if self._turning_direction != TurningDirection.Unknown:
             path = calculate_turningpath(self._turning_direction, self._is_driving_cw)
             steering_angle, speed = self._purePursuit.update(
-                current_pose.rotation_matrix, current_pose.position, path.T
+                current_pose.rotation_matrix, current_pose.position, path
             )
             self._publish_control_output(steering_angle=steering_angle, speed=self.params.turning_speed)
             return
