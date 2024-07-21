@@ -29,9 +29,9 @@ def calculate_turningpath(turningdirection, is_driving_cw: bool):
     kappa_ep = 1 / Radius
 
     A = np.array([[x0**3, x0**2, x0, 1], [x1**3, x1**2, x1, 1], [6 * x0, 2, 0, 0], [6 * x1, 2, 0, 0]])
-    print("A", A)
+    #print("A", A)
     B = np.array([y0, y1, kappa_sp, kappa_ep])
-    print("B", B)
+    #print("B", B)
 
     coefficients = np.linalg.solve(A, B)
     a, b, c, d = coefficients
